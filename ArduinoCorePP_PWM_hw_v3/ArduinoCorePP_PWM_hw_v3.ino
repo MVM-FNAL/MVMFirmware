@@ -102,7 +102,7 @@ bool __WDENABLE=false;
 bool __CONSOLE_MODE=false;
 bool __ADDTimeStamp=true;
 uint32_t watchdog_time =0;
-float last_O2=0;
+float last_O2=21.7;
 
 // The port to listen for incoming TCP connections
 
@@ -288,6 +288,12 @@ bool  batteryPowered=false;
 float currentBatteryCharge=0;
 
 
+float currentP_Peak=0;
+float currentTvIsnp=0;
+float currentTvEsp=0;
+float currentVM=0;
+
+
 SfmConfig sfm3019_inhale;
   
 void DBG_print(int level, String str)
@@ -469,6 +475,7 @@ float dgb_delta;
 int dbg_trigger;
 float dgb_peaktime;
 float fluxpeak=0;
+float pres_peak=0;
 unsigned long peaktime=0;
 
 float pplow=0;
@@ -530,14 +537,15 @@ void  onTimerCoreTask(){
               
             if (core_config.BreathMode == M_BREATH_FORCED)
             {
+              currentTvEsp=tidal_volume_c.ExpVolumeVenturi;
               last_peep = mean_peep;
-              
+              pres_peak=0;
 
               float last_delta_time = millis() - last_start;
               last_start=millis();
               if (last_delta_time > 0)
               {
-                last_bpm = 60.0/last_delta_time;
+                last_bpm = 60000.0/last_delta_time;
               }
                 
                TidalInhale();
@@ -561,7 +569,7 @@ void  onTimerCoreTask(){
             else  
             {
               //ASSISTED BREATHING MODE
-             
+             pres_peak=0;
 
               
               valve_contol(VALVE_OUT, VALVE_OPEN);
@@ -571,6 +579,7 @@ void  onTimerCoreTask(){
               if (((-1.0*delta2) > core_config.assist_pressure_delta_trigger) && (delta<0))
               //if (mean_peep_older-pressure[1].last_pressure >  core_config.assist_pressure_delta_trigger)
               {
+                currentTvEsp=tidal_volume_c.ExpVolumeVenturi;
                 last_peep = mean_peep;
           
   
@@ -578,7 +587,7 @@ void  onTimerCoreTask(){
                       last_start=millis();
                 if (last_delta_time > 0)
                 {
-                  last_bpm = 60.0/last_delta_time;
+                  last_bpm = 60000.0/last_delta_time;
                   averaged_bpm = averaged_bpm*0.6 + last_bpm;
                 }
                 
@@ -641,7 +650,10 @@ void  onTimerCoreTask(){
                core_sm_context.timer1 =0;
               if (core_config.constant_rate_mode)
               {
-                 TidalExhale();
+                TidalExhale();
+                currentP_Peak=pres_peak;
+                currentTvIsnp=tidal_volume_c.InspVolumeSensirion;
+                currentVM=fluxpeak;
                 valve_contol(VALVE_IN, VALVE_CLOSE);
                 valve_contol(VALVE_OUT, VALVE_OPEN);
                 CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_WAIT_EXHALE_TIME);
@@ -743,7 +755,7 @@ void  onTimerCoreTask(){
 void InitParameters()
 {
   
-  core_config.run=true;
+  core_config.run=false;
   core_config.constant_rate_mode = true;
   core_config.inhale_ms = 750;
   core_config.inhale_ms_extra = 00;
@@ -755,7 +767,7 @@ void InitParameters()
   core_config.pressure_drop = 8;
   core_config.inhale_critical_alarm_ms = 16000;
   core_config.exhale_critical_alarm_ms = 16000;
-  core_config.BreathMode = M_BREATH_ASSISTED; //M_BREATH_ASSISTED;//M_BREATH_FORCED;
+  core_config.BreathMode = M_BREATH_FORCED; //M_BREATH_ASSISTED;//;
   core_config.sim.rate_inhale_pressure=5;
   core_config.sim.rate_exhale_pressure=10;  
   core_config.flux_close = 5;
@@ -1189,14 +1201,25 @@ void GetCommandCallback(cmd* c) {
     {
       Serial.println("valore="+String(ALARM_FLAG) );
     }
+
+    if (strPatam == "warning")
+    {
+      Serial.println("valore="+String(0) );
+    }    
     
     if (strPatam == "all")
     {
       Serial.println("valore="+String(pressure[0].last_pressure) + "," + 
             String(tidal_volume_c.FLUX) + "," + String(last_O2) + "," + String(last_bpm)
             + "," + String(tidal_volume_c.TidalVolume) + "," + String(last_peep)
-            + "," + String(temperature) + "," + String(batteryPowered?1:0) + "," + String(currentBatteryCharge) );
+            + "," + String(temperature) + "," + String(batteryPowered?1:0) + "," + String(currentBatteryCharge) 
+            + "," + String(currentP_Peak) 
+            + "," + String(currentTvIsnp)
+            + "," + String(currentTvEsp)
+            + "," + String(currentVM)
+            );
     }  
+
 
 
     if (strPatam == "calib")
@@ -1410,8 +1433,8 @@ void loop() {
     }
     PressureControlLoop_PRESSIN_SLOW();
     pplow = 0.90*pplow + pressure[1].last_pressure *0.1;
-  
-    pmem[5] = pmem[4];
+    pres_peak = pplow >pres_peak ? pplow:pres_peak;
+    pmem[5] = pmem[4];  
     pmem[4] = pmem[3];
     pmem[3] = pmem[2];
     pmem[2] = pmem[1];
