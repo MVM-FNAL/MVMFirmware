@@ -530,14 +530,20 @@ void  onTimerCoreTask(){
       switch(core_sm_context.force_sm)
       {
         case FR_OPEN_INVALVE:
-          TidalReset();
+         
           dbg_state_machine =0;
           if (core_config.run)
           {
               
             if (core_config.BreathMode == M_BREATH_FORCED)
             {
-              currentTvEsp=tidal_volume_c.ExpVolumeVenturi;
+              if (tidal_volume_c.TidalCorrection>0)
+              {
+                currentTvEsp=-1.0*tidal_volume_c.ExpVolumeVenturi/  tidal_volume_c.TidalCorrection;
+              }
+        
+            
+               TidalReset();
               last_peep = mean_peep;
               pres_peak=0;
 
@@ -579,7 +585,9 @@ void  onTimerCoreTask(){
               if (((-1.0*delta2) > core_config.assist_pressure_delta_trigger) && (delta<0))
               //if (mean_peep_older-pressure[1].last_pressure >  core_config.assist_pressure_delta_trigger)
               {
+                
                 currentTvEsp=tidal_volume_c.ExpVolumeVenturi;
+                 TidalReset();
                 last_peep = mean_peep;
           
   
