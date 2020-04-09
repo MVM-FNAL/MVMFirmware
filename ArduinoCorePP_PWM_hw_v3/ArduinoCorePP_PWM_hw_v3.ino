@@ -95,6 +95,7 @@ bool __WDENABLE=false;
 bool __CONSOLE_MODE=false;
 bool __ADDTimeStamp=true;
 uint32_t watchdog_time =0;
+float last_O2=0;
 
 // The port to listen for incoming TCP connections
 
@@ -278,7 +279,7 @@ float CURRENT_PSET=0;
 
 bool  batteryPowered=false;
 float currentBatteryCharge=0;
-float last_peep=0;
+
 
 SfmConfig sfm3019_inhale;
   
@@ -444,7 +445,7 @@ unsigned long peaktime=0;
 float pplow=0;
   
 void  onTimerCoreTask(){
-  static float old_pressure[15];
+  static float old_pressure[256];
   static float old_delta;
    
   static float pplow_old;
@@ -455,7 +456,7 @@ void  onTimerCoreTask(){
                 
   static float delta =  0;
   static float delta2 = 0;
-  static last_start = 0;
+  static uint32_t last_start = 0;
 
   if (++timer_divider>=100/TIMERCORE_INTERVAL_MS)
   {
@@ -465,17 +466,19 @@ void  onTimerCoreTask(){
     pplow_old = pplow;
     old_delta = delta;
     dgb_delta=delta2; 
+    timer_divider=0;
   } 
   
   DBG_print(10,"ITimer0: millis() = " + String(millis()));
 
-  for (int q=0;q<14;q++)
+  for (int q=0;q<255;q++)
   {
-    old_pressure[14-q] = old_pressure[13-q];
+    old_pressure[255-q] = old_pressure[254-q];
   }
   old_pressure[0] = pressure[1].last_pressure;
 
   float mean_peep = (old_pressure[5] + old_pressure[6] + old_pressure[7] + old_pressure[8]+ old_pressure[9])/5.0;
+  float mean_peep_older = (old_pressure[25] + old_pressure[26] + old_pressure[27] + old_pressure[28]+ old_pressure[29])/5.0;
 
     core_sm_context.timer1++;
     core_sm_context.timer2++;
@@ -498,7 +501,7 @@ void  onTimerCoreTask(){
               last_peep = mean_peep;
               last_start=millis();
 
-              float last_delta_time = millis() - last_start();
+              float last_delta_time = millis() - last_start;
               if (last_delta_time > 0)
               {
                 last_bpm = 60.0/last_delta_time;
@@ -530,18 +533,20 @@ void  onTimerCoreTask(){
               
               valve_contol(VALVE_OUT, VALVE_OPEN);
               dbg_trigger=0;
+
               
-              if ((-1.0*delta2) > core_config.assist_pressure_delta_trigger)
+              //if (((-1.0*delta2) > core_config.assist_pressure_delta_trigger) && (delta<0))
+              if (mean_peep_older-pressure[1].last_pressure >  core_config.assist_pressure_delta_trigger)
               {
                 last_peep = mean_peep;
                 last_start=millis();
   
-                float last_delta_time = millis() - last_start();
+/*                float last_delta_time = millis() - last_start();
                 if (last_delta_time > 0)
                 {
                   last_bpm = 60.0/last_delta_time;
                   averaged_bpm = averaged_bpm*0.6 + last_bpm;
-                }
+                }*/
                 
                 TidalInhale();
           
@@ -657,19 +662,26 @@ void  onTimerCoreTask(){
         case FR_WAIT_EXHALE_TIME:
           dbg_state_machine =6;
            
-          if ((core_sm_context.timer1>= (core_config.exhale_ms/TIMERCORE_INTERVAL_MS)) && (core_config.pause_exhale==false))
+          if (core_sm_context.timer1>= (core_config.exhale_ms/TIMERCORE_INTERVAL_MS)) 
           {
-            peep_look=false;
-            if (core_config.BreathMode == M_BREATH_FORCED)
-              valve_contol(VALVE_OUT, VALVE_CLOSE);
-            CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_OPEN_INVALVE);
-            if (core_config.constant_rate_mode)
+            if (core_config.pause_exhale==false)
+            {
+              peep_look=false;
+              if (core_config.BreathMode == M_BREATH_FORCED)
                 valve_contol(VALVE_OUT, VALVE_CLOSE);
-                
-            DBG_print(3,"FR_OPEN_INVALVE");
+              CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_OPEN_INVALVE);
+              if (core_config.constant_rate_mode)
+                  valve_contol(VALVE_OUT, VALVE_CLOSE);
+                  
+              DBG_print(3,"FR_OPEN_INVALVE");
+            }
+            else
+            {
+              valve_contol(VALVE_OUT, VALVE_CLOSE);
+            }
           }
           break;
-  
+
         default:
           CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_OPEN_INVALVE);
           break;
@@ -699,12 +711,12 @@ void InitParameters()
   core_config.pressure_drop = 8;
   core_config.inhale_critical_alarm_ms = 16000;
   core_config.exhale_critical_alarm_ms = 16000;
-  core_config.BreathMode = M_BREATH_FORCED; //M_BREATH_ASSISTED;//M_BREATH_FORCED;
+  core_config.BreathMode = M_BREATH_ASSISTED; //M_BREATH_ASSISTED;//M_BREATH_FORCED;
   core_config.sim.rate_inhale_pressure=5;
   core_config.sim.rate_exhale_pressure=10;  
   core_config.flux_close = 30;
   core_config.assist_pressure_delta_trigger=0.1;
-  core_config.target_pressure = 30;
+  core_config.target_pressure = 15;
 
   core_config.respiratory_rate = 15;
   core_config.respiratory_ratio = 0.66;
@@ -1410,7 +1422,7 @@ void loop() {
   {
     String ts = __ADDTimeStamp ? String(millis())+ "," : "";
     DBG_print(1,ts + String(gasflux[0].last_flux) + "," + String(pressure[0].last_pressure)+ "," + String(pressure[1].last_pressure)+ ","  + String(PIDMonitor*100/4096) +  ","  + String(PIDMonitor2) + "," + String(valve2_status)+ "," + 
-     String(VenturiFlux) + "," + String(tidal_volume_c.FLUX) + "," + String(tidal_volume_c.TidalVolume*0.02));
+     String(VenturiFlux) + "," + String(tidal_volume_c.FLUX) + "," + String(tidal_volume_c.TidalVolume*0.02) + "," +  String(dgb_delta*100));
   }
      //String(dgb_delta*100) + "," + String(dbg_trigger*50));
     
