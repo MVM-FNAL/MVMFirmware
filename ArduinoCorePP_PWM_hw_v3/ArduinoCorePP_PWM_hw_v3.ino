@@ -43,6 +43,9 @@
 #define DAC1 A0 //25
 #define VALVE_OUT_PIN 32 //2 //12   (34)
 
+#define BUZZER 12
+#define ALARM_LED 13
+
 #define SIMULATE_SENSORS 0
 
 
@@ -56,6 +59,8 @@
 #define __ERROR_LEAKAGE                 5
 #define __ERROR_FULL_OCCLUSION          6
 #define __ERROR_PARTIAL_OCCLUSION       7
+#define __ERROR_ALARM_PI                29
+#define __ERROR_WDOG_PI                 30
 #define __ERROR_SYSTEM_FALIURE          31
 
 uint32_t ALARM_FLAG = 0x0;
@@ -68,7 +73,8 @@ typedef enum {
   FR_OPEN_OUTVALVE, 
   FR_WAIT_EXHALE_PRESSURE, 
   FR_WAIT_EXHALE_PRESSURE_EXTRA, 
-  FR_WAIT_EXHALE_TIME
+  FR_WAIT_EXHALE_TIME,
+  FR_ASSIST_DEADTIME
   } t_core__force_sm;
   
 typedef enum {
@@ -85,7 +91,8 @@ typedef enum {
   ALARM_PRESSURE_INPUT_TOO_LOW,
   ALARM_PRESSURE_INPUT_TOO_HIGH,
   ALARM_GUI_ALARM,
-  ALARM_GUI_WDOG
+  ALARM_GUI_WDOG,
+  UNPREDICTABLE_CODE_EXECUTION
 
   } t_ALARM;
 typedef enum {VALVE_IN, VALVE_OUT} valves;
@@ -368,15 +375,34 @@ void TriggerAlarm(t_ALARM Alarm)
 
     case ALARM_GUI_ALARM:
       DBG_print(2,"ALARM @ " + String(millis()) + " ALARM_GUI_ALARM");
+      ALARM_FLAG = ALARM_FLAG | GenerateFlag(__ERROR_ALARM_PI);
     break;
 
     case ALARM_GUI_WDOG:
       DBG_print(2,"ALARM @ " + String(millis()) + " ALARM_WDOG");
+      ALARM_FLAG = ALARM_FLAG | GenerateFlag(__ERROR_WDOG_PI);
     break;
+
+    case UNPREDICTABLE_CODE_EXECUTION:
+      DBG_print(2,"ALARM @ " + String(millis()) + " UNPREDICTABLE_CODE_EXECUTION");
+      ALARM_FLAG = ALARM_FLAG | GenerateFlag(__ERROR_SYSTEM_FALIURE);
+    break;
+    
         
     default:
 
     break;
+  }
+
+  if (ALARM_FLAG!=0)
+  {
+    //ledcWrite(1, 128); 
+    digitalWrite(ALARM_LED, HIGH);
+  }
+  else
+  {
+    //ledcWrite(1, 0); 
+    digitalWrite(ALARM_LED, LOW);
   }
 }
 
@@ -385,6 +411,9 @@ void ResetAlarm(int alarm_code)
 {
   ALARM_FLAG = ALARM_FLAG & (!GenerateFlag(alarm_code));
 }
+
+
+
 
 void CheckAlarmConditions(t_core__force_sm sm)
 {
@@ -443,31 +472,34 @@ float fluxpeak=0;
 unsigned long peaktime=0;
 
 float pplow=0;
-  
+
+  static float delta =  0;
+  static float delta2 = 0;
+
 void  onTimerCoreTask(){
   static float old_pressure[256];
-  static float old_delta;
-   
-  static float pplow_old;
+//  static float old_delta;  
+//  static float pplow_old;
 
   static int timer_divider =0;
 
   
                 
-  static float delta =  0;
-  static float delta2 = 0;
+  //static float delta =  0;
+  //static float delta2 = 0;
   static uint32_t last_start = 0;
 
-  if (++timer_divider>=100/TIMERCORE_INTERVAL_MS)
+  /*if (++timer_divider>=100/TIMERCORE_INTERVAL_MS)
   {
                     
     delta =  pplow -  pplow_old ;
-    delta2 = delta-old_delta;
+    delta2 = (delta-old_delta)*100;
     pplow_old = pplow;
     old_delta = delta;
     dgb_delta=delta2; 
     timer_divider=0;
   } 
+  */
   
   DBG_print(10,"ITimer0: millis() = " + String(millis()));
 
@@ -499,9 +531,10 @@ void  onTimerCoreTask(){
             if (core_config.BreathMode == M_BREATH_FORCED)
             {
               last_peep = mean_peep;
-              last_start=millis();
+              
 
               float last_delta_time = millis() - last_start;
+              last_start=millis();
               if (last_delta_time > 0)
               {
                 last_bpm = 60.0/last_delta_time;
@@ -535,18 +568,19 @@ void  onTimerCoreTask(){
               dbg_trigger=0;
 
               
-              //if (((-1.0*delta2) > core_config.assist_pressure_delta_trigger) && (delta<0))
-              if (mean_peep_older-pressure[1].last_pressure >  core_config.assist_pressure_delta_trigger)
+              if (((-1.0*delta2) > core_config.assist_pressure_delta_trigger) && (delta<0))
+              //if (mean_peep_older-pressure[1].last_pressure >  core_config.assist_pressure_delta_trigger)
               {
                 last_peep = mean_peep;
-                last_start=millis();
+          
   
-/*                float last_delta_time = millis() - last_start();
+                float last_delta_time = millis() - last_start;
+                      last_start=millis();
                 if (last_delta_time > 0)
                 {
                   last_bpm = 60.0/last_delta_time;
                   averaged_bpm = averaged_bpm*0.6 + last_bpm;
-                }*/
+                }
                 
                 TidalInhale();
           
@@ -651,7 +685,7 @@ void  onTimerCoreTask(){
             }
             else
             {
-                CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_OPEN_INVALVE);  
+                CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_ASSIST_DEADTIME);  
             }
             core_sm_context.timer1 =0;
             DBG_print(3,"FR_WAIT_EXHALE_TIME");
@@ -681,8 +715,18 @@ void  onTimerCoreTask(){
             }
           }
           break;
+        
+        case FR_ASSIST_DEADTIME:
+          dbg_state_machine =6;
+          if (core_sm_context.timer1>= (300/TIMERCORE_INTERVAL_MS)) 
+          {
+            CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_OPEN_INVALVE);  
+            
+          }
+          break;
 
         default:
+          TriggerAlarm(UNPREDICTABLE_CODE_EXECUTION);
           CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_OPEN_INVALVE);
           break;
       }
@@ -714,9 +758,9 @@ void InitParameters()
   core_config.BreathMode = M_BREATH_ASSISTED; //M_BREATH_ASSISTED;//M_BREATH_FORCED;
   core_config.sim.rate_inhale_pressure=5;
   core_config.sim.rate_exhale_pressure=10;  
-  core_config.flux_close = 30;
-  core_config.assist_pressure_delta_trigger=0.1;
-  core_config.target_pressure = 15;
+  core_config.flux_close = 5;
+  core_config.assist_pressure_delta_trigger=15;
+  core_config.target_pressure = 20;
 
   core_config.respiratory_rate = 15;
   core_config.respiratory_ratio = 0.66;
@@ -740,13 +784,23 @@ void setup(void)
 {
   //pinMode (VALVE_IN_PIN, OUTPUT);
 
+  
+
   ledcSetup(0, 10000, 12);
+  //ledcSetup(1, 4000, 8);
+
   
   // attach the channel to the GPIO to be controlled
   ledcAttachPin(DAC1, 0);
+  //ledcAttachPin(BUZZER, 1);
 
   ledcWrite(0, 0);
+  
+  //ledcWrite(1, 0);
   pinMode (VALVE_OUT_PIN, OUTPUT);
+  pinMode (ALARM_LED, OUTPUT);
+  
+  digitalWrite(ALARM_LED, LOW);
 
 
   // Start Serial
@@ -1304,12 +1358,16 @@ void PressureControlLoop_PRESSIN()
 }
 
 void loop() {
+   static float pmem[6];
   static float VenturiFlux;
   static uint32_t last_loop_time;
   static uint8_t RestStateMachine =0;
   static int serverhanging = 0; // Used to monitor how long the client is hanging
   static int serverhangingrestartdelay = 500; // delay after which we discard a hanging client
   static uint32_t sensor_read_last_time =0;
+
+  static float old_delta;  
+  static float pplow_old;
 
   //Check connection with raspberry when RUN
   if (__CONSOLE_MODE==false)
@@ -1332,6 +1390,9 @@ void loop() {
   PressureControlLoop_PRESSIN();
 
 
+
+  
+
  /*if (peep_look==true)
  {
   if (pressure[0].last_pressure<10)
@@ -1342,13 +1403,26 @@ void loop() {
  }*/
   if (millis() > sensor_read_last_time + 20)
   {
+   
     if (read_pressure_sensor(1)!= 0)
     {
       TriggerAlarm(UNABLE_TO_READ_SENSOR_PRESSURE);
     }
     PressureControlLoop_PRESSIN_SLOW();
     pplow = 0.90*pplow + pressure[1].last_pressure *0.1;
-
+  
+    pmem[5] = pmem[4];
+    pmem[4] = pmem[3];
+    pmem[3] = pmem[2];
+    pmem[2] = pmem[1];
+    pmem[1] = pmem[0];
+    pmem[0] = pplow;
+    delta =  pplow -  pplow_old ;
+    delta2 = (delta-old_delta)*100;
+    pplow_old = pmem[5];
+    old_delta = delta;
+    dgb_delta=delta2; 
+    
     float flux ;
     //if (MeasureFlux(&flux) == false)
     //{
@@ -1422,7 +1496,7 @@ void loop() {
   {
     String ts = __ADDTimeStamp ? String(millis())+ "," : "";
     DBG_print(1,ts + String(gasflux[0].last_flux) + "," + String(pressure[0].last_pressure)+ "," + String(pressure[1].last_pressure)+ ","  + String(PIDMonitor*100/4096) +  ","  + String(PIDMonitor2) + "," + String(valve2_status)+ "," + 
-     String(VenturiFlux) + "," + String(tidal_volume_c.FLUX) + "," + String(tidal_volume_c.TidalVolume*0.02) + "," +  String(dgb_delta*100));
+     String(VenturiFlux) + "," + String(tidal_volume_c.FLUX) + "," + String(tidal_volume_c.TidalVolume*0.02) + "," +  String(dgb_delta));
   }
      //String(dgb_delta*100) + "," + String(dbg_trigger*50));
     
