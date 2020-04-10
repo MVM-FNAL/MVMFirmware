@@ -196,6 +196,7 @@ struct
 typedef struct
 {
   int32_t C[6];
+  int32_t Q[6];
   float ZERO;
 } t_5525DSO_calibration_table;
 
@@ -212,6 +213,9 @@ typedef struct
 } t_tidal_volume_c;
 
 t_tidal_volume_c tidal_volume_c;
+
+typedef enum {DS_01, GS_05} t_ps_sensor;
+t_ps_sensor pressure_sensor_type []= {DS_01, DS_01, DS_01, DS_01};
 
 uint8_t pressure_sensor_i2c_address [] = {0x76, 0x77, 0x76, 0x77};
 uint8_t pressure_sensor_i2c_mux [] = {IIC_MUX_P_FASTLOOP, IIC_MUX_P_FASTLOOP, IIC_MUX_P_2, IIC_MUX_P_2};
@@ -265,6 +269,12 @@ void TidalInhale();
 void TidalExhale();
 
 
+void ResetStats();
+void ResetStatsBegin();
+void StatPhaseExpire();
+void StatEndCycle();
+void StatsUpdate(); 
+
 int valve1_status = 0;
 int valve2_status = 0;
 
@@ -297,6 +307,47 @@ bool use_Sensirion_Backup=false;
 
 
 SfmConfig sfm3019_inhale;
+
+
+
+typedef struct
+{
+  float overshoot_avg;
+  float overshoot_length_avg;    
+  float time_to_peak_avg;
+  float final_error_avg;
+  float t1050_avg;
+  float t1090_avg;
+  float tpeak_avg;
+  float t9010_avg;
+  float t9050_avg;  
+  float peep_avg;
+  float t10_avg;
+  float flux_peak_avg;
+  float flux_t1090_avg;
+  float flux_t9010_avg;  
+
+  float time_to_peak;
+  float overshoot;  
+  float final_error;  
+  float t10a;
+  float t50a;
+  float t90a;
+  float t10b;
+  float t50b;
+  float t90b;  
+  float overshoot_length;
+  float flux_peak;
+  float flux_t10a;
+  float flux_t90a;
+  float flux_t10b;
+  float flux_t90b;
+      
+  int mean_cnt;
+  uint32_t start_time;
+  int phase;
+} t_stat_param;
+t_stat_param __stat_param;
   
 void DBG_print(int level, String str)
 {
@@ -544,7 +595,7 @@ void  onTimerCoreTask(){
                 currentTvEsp=-1.0*tidal_volume_c.ExpVolumeVenturi/  tidal_volume_c.TidalCorrection;
               }
         
-            
+              ResetStats();
                TidalReset();
               last_peep = mean_peep;
               pres_peak=0;
@@ -589,6 +640,7 @@ void  onTimerCoreTask(){
               {
                 
                 currentTvEsp=tidal_volume_c.ExpVolumeVenturi;
+                 ResetStats();
                  TidalReset();
                 last_peep = mean_peep;
           
@@ -645,6 +697,7 @@ void  onTimerCoreTask(){
             if ( (gasflux[0].last_flux <= (core_config.flux_close * fluxpeak)/100.0 ) && (core_config.pause_inhale==false))
             {
               TidalExhale();
+              StatPhaseExpire();
               valve_contol(VALVE_IN, VALVE_CLOSE);
               valve_contol(VALVE_OUT, VALVE_OPEN);
               CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_WAIT_INHALE_TIME);
@@ -661,6 +714,8 @@ void  onTimerCoreTask(){
               if (core_config.constant_rate_mode)
               {
                 TidalExhale();
+                StatPhaseExpire();
+       
                 currentP_Peak=pres_peak;
                 currentTvIsnp=tidal_volume_c.InspVolumeSensirion;
                 currentVM=fluxpeak;
@@ -722,6 +777,7 @@ void  onTimerCoreTask(){
           {
             if (core_config.pause_exhale==false)
             {
+              StatEndCycle();    
               peep_look=false;
               if (core_config.BreathMode == M_BREATH_FORCED)
                 valve_contol(VALVE_OUT, VALVE_CLOSE);
@@ -743,7 +799,7 @@ void  onTimerCoreTask(){
           if (core_sm_context.timer1>= (300/TIMERCORE_INTERVAL_MS)) 
           {
             CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_OPEN_INVALVE);  
-            
+            StatEndCycle();    
           }
           break;
 
@@ -876,6 +932,28 @@ void setup(void)
     Serial.print("TCO:              ");   Serial.println(PRES_SENS_CT[j].C[3]);
     Serial.print("TREF:             ");   Serial.println(PRES_SENS_CT[j].C[4]);
     Serial.print("TEMPSENS:         ");   Serial.println(PRES_SENS_CT[j].C[5]);
+
+    switch(pressure_sensor_type[j])
+    {
+      case DS_01:
+        PRES_SENS_CT[j].Q[0] = 15;
+        PRES_SENS_CT[j].Q[1] = 17;
+        PRES_SENS_CT[j].Q[2] = 7;
+        PRES_SENS_CT[j].Q[3] = 5;
+        PRES_SENS_CT[j].Q[4] = 7;
+        PRES_SENS_CT[j].Q[5] = 21;
+        break;
+        
+      case GS_05:
+        PRES_SENS_CT[j].Q[0] = 16;
+        PRES_SENS_CT[j].Q[1] = 17;
+        PRES_SENS_CT[j].Q[2] = 6;
+        PRES_SENS_CT[j].Q[3] = 5;
+        PRES_SENS_CT[j].Q[4] = 7;
+        PRES_SENS_CT[j].Q[5] = 21;
+        break;        
+    }
+    
     float mean=0;
     PRES_SENS_CT[j].ZERO = 0;
     for (int q=0;q<100;q++)
@@ -883,7 +961,9 @@ void setup(void)
       read_pressure_sensor(j);
       mean +=pressure[j].last_pressure;
     }
-    PRES_SENS_CT[j].ZERO = mean/100;
+  PRES_SENS_CT[j].ZERO = mean/100;
+    
+  
     Serial.print("OFFSET:            ");   Serial.println(PRES_SENS_CT[j].ZERO);
   }
 
@@ -916,6 +996,8 @@ void setup(void)
 
 
   watchdog_time =millis();
+
+  ResetStatsBegin();
 }
 
 
@@ -1129,7 +1211,10 @@ void SetCommandCallback(cmd* c) {
       Serial.println("valore=OK");
     }          
 
-
+  if (strPatam == "stats_clear")
+  {
+    ResetStatsBegin();
+  }
     
 }
 
@@ -1263,6 +1348,49 @@ void GetCommandCallback(cmd* c) {
          tidal_volume_c.AutoZero = fabs(tidal_volume_c.InspVolumeVenturi) / fabs(tidal_volume_c.ExpVolumeVenturi);
 
        Serial.println("valore=" + String(tidal_volume_c.InspVolumeVenturi)+ "," + String(tidal_volume_c.ExpVolumeVenturi) + "," + String(tidal_volume_c.AutoZero));
+    }
+
+    if (strPatam == "stats")
+    {
+      if (__stat_param.mean_cnt>0)
+      {
+          float overshoot_avg = __stat_param.overshoot_avg / __stat_param.mean_cnt;
+          float overshoot_length_avg = __stat_param.overshoot_length_avg / __stat_param.mean_cnt;
+          float final_error_avg= __stat_param.final_error_avg / __stat_param.mean_cnt;
+          float t1050_avg = __stat_param.t1050_avg / __stat_param.mean_cnt;
+          float t1090_avg = __stat_param.t1090_avg / __stat_param.mean_cnt;
+          float tpeak_avg = __stat_param.tpeak_avg / __stat_param.mean_cnt;
+          float t9010_avg = __stat_param.t9010_avg / __stat_param.mean_cnt;
+          float t9050_avg = __stat_param.t9050_avg / __stat_param.mean_cnt;
+          float peep_avg = __stat_param.peep_avg / __stat_param.mean_cnt;
+          float t10_avg = __stat_param.t10_avg / __stat_param.mean_cnt;
+          float time_to_peak_avg = __stat_param.time_to_peak_avg / __stat_param.mean_cnt;
+          float flux_peak_avg = __stat_param.flux_peak_avg / __stat_param.mean_cnt;
+          float flux_t1090_avg = __stat_param.flux_t1090_avg / __stat_param.mean_cnt;
+          float flux_t9010_avg = __stat_param.flux_t9010_avg / __stat_param.mean_cnt;
+
+
+
+          Serial.println("valore=overshoot_avg:" + String(overshoot_avg)
+            +",overshoot_length_avg:" + String(overshoot_length_avg) 
+             +",final_error:" + String(final_error_avg) 
+              +",t1050_avg:" + String(t1050_avg) 
+               +",t1090_avg:" + String(t1090_avg) 
+                +",tpeak_avg:" + String(tpeak_avg) 
+                 +",t9010_avg:" + String(t9010_avg) 
+                  +",t9050_avg:" + String(t9050_avg) 
+                   +",peep_avg:" + String(peep_avg) 
+                    +",t10_avg:" + String(t10_avg) 
+                     +",time_to_peak_avg:" + String(time_to_peak_avg) 
+                      +",flux_peak_avg:" + String(flux_peak_avg) 
+                       +",flux_t1090_avg:" + String(flux_t1090_avg) 
+                        +",flux_t9010_avg:" + String(flux_t9010_avg) 
+         );
+      }
+      else
+      {
+        Serial.println("valore=no_data");
+      }
     }
 
 
@@ -1446,6 +1574,9 @@ void loop() {
     {
       TriggerAlarm(UNABLE_TO_READ_SENSOR_PRESSURE);
     }
+
+     
+    
     PressureControlLoop_PRESSIN_SLOW();
     pplow = 0.90*pplow + pressure[1].last_pressure *0.1;
     pres_peak = pplow >pres_peak ? pplow:pres_peak;
@@ -1536,6 +1667,7 @@ void loop() {
        break;   
     }
 
+      StatsUpdate(); 
       i2c_MuxSelect(IIC_MUX_P_FASTLOOP);
   }
 
@@ -1969,12 +2101,12 @@ bool Convert_5525DSO(int address, int32_t *temp, int32_t *pressure, bool read_te
 
 void CalibrateDate_5525DSO(t_5525DSO_calibration_table CT, int32_t raw_temp, int32_t raw_pressure, float *T, float *P)
 {
-  int32_t Q1 = 15;
-  int32_t Q2 = 17;
-  int32_t Q3 = 7;
-  int32_t Q4 = 5;
-  int32_t Q5 = 7;
-  int32_t Q6 = 21;
+  int32_t Q1 = CT.Q[0];
+  int32_t Q2 = CT.Q[1];
+  int32_t Q3 = CT.Q[2];
+  int32_t Q4 = CT.Q[3];
+  int32_t Q5 = CT.Q[4];
+  int32_t Q6 = CT.Q[5];
 
   int32_t C1 = CT.C[0];
   int32_t C2 = CT.C[1];
@@ -2169,3 +2301,145 @@ void TidalExhale()
     
   tidal_volume_c.TidalStatus=2;
 }
+
+
+void ResetStats()
+{
+  __stat_param.start_time = millis();
+  __stat_param.overshoot = -1000;
+  __stat_param.final_error = -1000;
+  __stat_param.t10a = -1000;
+  __stat_param.t50a = -1000;
+  __stat_param.t90a = -1000;
+  __stat_param.t10b = -1000;
+  __stat_param.t50b = -1000;
+  __stat_param.t90b = -1000;      
+  __stat_param.overshoot_length = 0;
+  __stat_param.phase=0;
+  __stat_param.time_to_peak=0;
+
+  __stat_param.flux_t10a = -1000;
+  __stat_param.flux_t90a = -1000;
+  __stat_param.flux_t10b = -1000;
+  __stat_param.flux_t90b = -1000;
+}
+
+void ResetStatsBegin()
+{
+  __stat_param.overshoot_avg=0;
+  __stat_param.overshoot_length_avg=0;
+  __stat_param.final_error_avg=0;
+  __stat_param.t1050_avg=0;
+  __stat_param.t1090_avg=0;
+  __stat_param.tpeak_avg=0;
+  __stat_param.t9010_avg=0;
+  __stat_param.t9050_avg=0;
+  __stat_param.peep_avg=0;
+  __stat_param.t10_avg=0;
+  __stat_param.time_to_peak_avg=0;
+  __stat_param.peep_avg =0;
+  __stat_param.flux_peak_avg =0; 
+  __stat_param.flux_t1090_avg =0; 
+  __stat_param.flux_t9010_avg =0;   
+  __stat_param.flux_peak =0; 
+  __stat_param.mean_cnt=0;
+  
+}
+
+void StatPhaseExpire()
+{
+  __stat_param.phase=1;
+}
+
+
+void StatEndCycle()
+{
+    __stat_param.phase=2;
+    if (__stat_param.t10a>0)
+    __stat_param.t10_avg += __stat_param.t10a;   
+    if ((__stat_param.t50a - __stat_param.t10a)>0)
+    __stat_param.t1050_avg += (__stat_param.t50a - __stat_param.t10a);
+    if ((__stat_param.t90a - __stat_param.t10a)>0)
+    __stat_param.t1090_avg += (__stat_param.t90a - __stat_param.t10a);
+    if ((__stat_param.t10b - __stat_param.t90b)>0)
+      __stat_param.t9010_avg += (__stat_param.t10b - __stat_param.t90b);
+    if ((__stat_param.t50b - __stat_param.t90b)>0)
+      __stat_param.t1090_avg += (__stat_param.t50b - __stat_param.t90b);    
+      
+    __stat_param.tpeak_avg += currentP_Peak;
+    __stat_param.peep_avg += last_peep;
+    __stat_param.overshoot_length_avg += __stat_param.overshoot_length;
+    __stat_param.final_error_avg += __stat_param.final_error;
+    __stat_param.time_to_peak_avg += __stat_param.time_to_peak;
+    __stat_param.overshoot_avg += __stat_param.overshoot-core_config.target_pressure;
+
+    __stat_param.flux_peak_avg += currentVM; 
+    if ((__stat_param.flux_t90a - __stat_param.flux_t10a)>0)
+    __stat_param.flux_t1090_avg += (__stat_param.flux_t90a - __stat_param.flux_t10a);
+    if ((__stat_param.flux_t10b - __stat_param.flux_t90b)>0)
+    __stat_param.flux_t9010_avg += (__stat_param.flux_t10b - __stat_param.flux_t90b);
+ 
+    __stat_param.flux_peak =currentVM; 
+  
+  __stat_param.mean_cnt++;
+}
+
+void StatsUpdate()
+{
+   if (__stat_param.phase==0)
+    {
+     if ((pressure[1].last_pressure>=0.1*core_config.target_pressure) && (__stat_param.t10a == -1000))
+       __stat_param.t10a =  millis() - __stat_param.start_time ;
+
+     if ((pressure[1].last_pressure>=0.5*core_config.target_pressure) && (__stat_param.t50a == -1000))
+      __stat_param.t50a =  millis() - __stat_param.start_time ;  
+      
+     if ((pressure[1].last_pressure>=0.9*core_config.target_pressure) && (__stat_param.t90a == -1000))
+      __stat_param.t90a =  millis() - __stat_param.start_time ;  
+
+      if (__stat_param.overshoot < pressure[1].last_pressure)
+      {
+        __stat_param.overshoot = pressure[1].last_pressure;
+        __stat_param.time_to_peak = millis() - __stat_param.start_time ;
+      }
+
+     if (pressure[1].last_pressure>= (core_config.target_pressure+1))
+     {
+       __stat_param.overshoot_length += 20;  
+     }
+     __stat_param.final_error = pressure[1].last_pressure-core_config.target_pressure;
+
+     if ((gasflux[0].last_flux>=0.1*__stat_param.flux_peak) && (__stat_param.flux_t10a == -1000))
+      __stat_param.flux_t10a =  millis() - __stat_param.start_time ;  
+
+     if ((gasflux[0].last_flux>=0.9*__stat_param.flux_peak) && (__stat_param.flux_t90a == -1000))
+      __stat_param.flux_t90a =  millis() - __stat_param.start_time ;        
+    
+    }
+
+     if (__stat_param.phase==1)
+     {
+       if ((pressure[1].last_pressure-last_peep<=0.1*core_config.target_pressure) && (__stat_param.t10b == -1000))
+         __stat_param.t10b =  millis() - __stat_param.start_time ;
+  
+       if ((pressure[1].last_pressure-last_peep<=0.5*core_config.target_pressure) && (__stat_param.t50b == -1000))
+        __stat_param.t50b =  millis() - __stat_param.start_time ;  
+        
+       if ((pressure[1].last_pressure-last_peep<=0.9*core_config.target_pressure) && (__stat_param.t90b == -1000))
+        __stat_param.t90b =  millis() - __stat_param.start_time ; 
+
+       if ((gasflux[0].last_flux<=0.1*__stat_param.flux_peak) && (__stat_param.flux_t10b == -1000))
+        __stat_param.flux_t10b =  millis() - __stat_param.start_time ;  
+  
+       if ((gasflux[0].last_flux<=0.9*__stat_param.flux_peak) && (__stat_param.flux_t90b == -1000))
+        __stat_param.flux_t90b =  millis() - __stat_param.start_time ;                  
+     }
+}
+/*
+void CalculateStatOnRising()
+{
+  if (t10==-1)
+  {
+    if (pressure[1].last_pressure > 0.1 * )
+  }
+}*/
