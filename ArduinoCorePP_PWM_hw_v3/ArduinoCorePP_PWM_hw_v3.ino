@@ -293,6 +293,8 @@ float currentTvIsnp=0;
 float currentTvEsp=0;
 float currentVM=0;
 
+bool use_Sensirion_Backup=false;
+
 
 SfmConfig sfm3019_inhale;
   
@@ -888,8 +890,13 @@ void setup(void)
 
   //MeasureFluxInit();
   i2c_MuxSelect(IIC_MUX_FLOW1);
-  InitFlowMeter_SFM3019(&sfm3019_inhale);
-  Serial.println(" Measure Flow Sensor initialized!");
+  if (InitFlowMeter_SFM3019(&sfm3019_inhale)==false)
+  {
+    Serial.println(" Try using Sensirion Backup!");
+    use_Sensirion_Backup=true;
+    MeasureFluxInit();
+  }
+  
 
 
 
@@ -1460,9 +1467,22 @@ void loop() {
     // 
     //}
     i2c_MuxSelect(IIC_MUX_FLOW1);
-    if (!MeasureFlux_SFM3019(&sfm3019_inhale, &flux, &temperature))
+    if (use_Sensirion_Backup)
     {
-      TriggerAlarm(UNABLE_TO_READ_SENSOR_FLUX);
+      //Backup (OLD) sensore
+      if (MeasureFlux(&flux) == false)
+      {
+        TriggerAlarm(UNABLE_TO_READ_SENSOR_FLUX);
+      }   
+      temperature = 24;   
+    }
+    else
+    {
+      //Normal Sensiro Sensor
+      if (!MeasureFlux_SFM3019(&sfm3019_inhale, &flux, &temperature))
+      {
+        TriggerAlarm(UNABLE_TO_READ_SENSOR_FLUX);
+      }
     }
 
     gasflux[0].last_flux = flux; //gasflux[0].last_flux * 0.5 + (0.5*flux);
