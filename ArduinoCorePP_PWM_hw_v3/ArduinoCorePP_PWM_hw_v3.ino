@@ -1283,15 +1283,19 @@ void PressureControlLoop_PRESSIN_SLOW()
   float PID_D = core_config.D2;  
   static float Pset2 = 0;
 
-  static float pid_outb=0;
+  static float Pset2 = 0;       // setpoint
+  static float pid_outb=0;      // Saturated Output
+  static float FeedForward=0;   // Feedforward Signal
 
   float Pmeas = 0;
 
+ // PID Input
   Pmeas = pressure[1].last_pressure;
 
   if (Pset == 0)
   {
     Pset2 = Pmeas;
+    FeedForward=Pset2;
     pid_integral=0;
     pid_prec=0;
     pid_outb=0;
@@ -1305,7 +1309,7 @@ void PressureControlLoop_PRESSIN_SLOW()
    // if ((pid_integral*PID_I) > 60 ) pid_integral = (60/PID_I);
     if (pid_integral <0 ) pid_integral = 0;
     
-    pid_out= PID_P* pid_error + PID_I*pid_integral + PID_D*(pid_error-pid_prec);
+    pid_out= FeedForward + PID_P* pid_error + PID_I*pid_integral + PID_D*(pid_error-pid_prec);
   
  
     pid_outb = pid_out;
@@ -1313,6 +1317,8 @@ void PressureControlLoop_PRESSIN_SLOW()
     if (pid_outb<Pset2*core_config.pid_limit) pid_outb=Pset2*core_config.pid_limit;
     if (pid_outb>50) pid_outb=50;
   
+ // ANTIWINDUP BACK CALCULATION
+    pid_integral= pid_integral+(pid_outb-pid_out)/PID_I;
     pid_prec = pid_error;
   
 
@@ -1338,9 +1344,10 @@ void PressureControlLoop_PRESSIN()
   float PID_P = core_config.P;
   float PID_I = core_config.I;        //0.2 over resistance 50
   float PID_D = core_config.D;  
-  static float Pset2 = 0;
-
-  static float pid_outb=0;
+  
+  static float Pset2 = 0;       // setpoint
+  static float pid_outb=0;      // Saturated Output
+  static float FeedForward=0;   // Feedforward Signal
 
   float Pmeas = 0;
 
@@ -1348,6 +1355,7 @@ void PressureControlLoop_PRESSIN()
 
   if (Pset == 0)
   {
+    FeedForward=0.9*pid_outb; // 90% of last action used as feedforward
     Pset2 =Pmeas ;
     //if (pid_integral == (4095/PID_I))
       pid_integral=0;
@@ -1359,12 +1367,12 @@ void PressureControlLoop_PRESSIN()
     Pset2 = (Pset2*0.9 )+ (0.1 * fast_pid_set) ;
     // Pset2 = (Pset2*0.7 )+ (0.3 * Pset); //Parker con lettura lenta
   
-  pid_error = Pset2-Pmeas;
+    pid_error = Pset2-Pmeas;
     pid_integral += pid_error ;
     if ((pid_integral*PID_I) > 4095 ) pid_integral = (4095/PID_I);
     if ((pid_integral*PID_I) <-4095 ) pid_integral = -(4095/PID_I);
     
-    pid_out= PID_P* pid_error + PID_I*pid_integral + PID_D*(pid_error-pid_prec);
+    pid_out=  FeedForward   +    PID_P* pid_error + PID_I*pid_integral + PID_D*(pid_error-pid_prec);
   
     //pid_outb = pid_outb * 0.8 + pid_out*0.2;
     pid_outb = pid_out;
@@ -1372,6 +1380,9 @@ void PressureControlLoop_PRESSIN()
      pid_outb = pid_outb + 500;
     if (pid_outb>4090) pid_outb=4090;
   
+    // ANTIWINDUP BACK CALCULATION
+    pid_integral= pid_integral+(pid_outb-pid_out)/PID_I;
+
     pid_prec = pid_error;
   
     if (Pset==0)
