@@ -43,8 +43,8 @@
 #define DAC1 A0 //25
 #define VALVE_OUT_PIN 32 //2 //12   (34)
 
-#define BUZZER 12
-#define ALARM_LED 13
+#define BUZZER A11
+#define ALARM_LED A12
 
 #define SIMULATE_SENSORS 0
 
@@ -64,6 +64,8 @@
 #define __ERROR_SYSTEM_FALIURE          31
 
 uint32_t ALARM_FLAG = 0x0;
+uint32_t ALARM_FLAG_SNOOZE = 0x0;
+uint32_t ALARM_FLAG_SNOOZE_millis =0;
 
 typedef enum {
   FR_OPEN_INVALVE, 
@@ -142,6 +144,8 @@ struct
 
   float flux_close;
   float target_pressure;
+  float target_pressure_auto;
+  float target_pressure_assist;
   float respiratory_rate;
   float respiratory_ratio;
   
@@ -162,6 +166,9 @@ struct
   bool pause_exhale;
 
   float pid_limit;
+
+  bool    backup_enable;
+  float  backup_min_rate;
   
 } core_config;
 
@@ -295,7 +302,7 @@ float CURRENT_PSET=0;
 
 
 bool  batteryPowered=false;
-float currentBatteryCharge=0;
+float currentBatteryCharge=100;
 
 
 float currentP_Peak=0;
@@ -304,6 +311,7 @@ float currentTvEsp=0;
 float currentVM=0;
 
 bool use_Sensirion_Backup=false;
+
 
 
 SfmConfig sfm3019_inhale;
@@ -369,7 +377,7 @@ uint32_t GenerateFlag(int alarm_code)
 
 void TriggerAlarm(t_ALARM Alarm)
 {
-
+ 
   switch(Alarm)
   {
     case PRESSURE_DROP_INHALE:
@@ -404,12 +412,12 @@ void TriggerAlarm(t_ALARM Alarm)
 
     case ALARM_PRESSURE_INSIDE_TOO_HIGH:
       DBG_print(2,"ALARM @ " + String(millis()) + " ALARM_PRESSURE_INSIDE_TOO_HIGH");
-      ALARM_FLAG = ALARM_FLAG | GenerateFlag(__ERROR_INSIDE_PRESSURE_LOW);
+      ALARM_FLAG = ALARM_FLAG | GenerateFlag(__ERROR_INSIDE_PRESSURE_HIGH);
     break;  
 
     case ALARM_PRESSURE_INSIDE_TOO_LOW:
       DBG_print(2,"ALARM @ " + String(millis()) + " ALARM_PRESSURE_INSIDE_TOO_LOW");
-      ALARM_FLAG = ALARM_FLAG | GenerateFlag(__ERROR_INSIDE_PRESSURE_HIGH);
+      ALARM_FLAG = ALARM_FLAG | GenerateFlag(__ERROR_INSIDE_PRESSURE_LOW);
     break;        
 
     case ALARM_LEAKAGE:
@@ -453,22 +461,17 @@ void TriggerAlarm(t_ALARM Alarm)
     break;
   }
 
-  if (ALARM_FLAG!=0)
-  {
-    //ledcWrite(1, 128); 
-    digitalWrite(ALARM_LED, HIGH);
-  }
-  else
-  {
-    //ledcWrite(1, 0); 
-    digitalWrite(ALARM_LED, LOW);
-  }
+
+ 
 }
 
 
 void ResetAlarm(int alarm_code)
 {
-  ALARM_FLAG = ALARM_FLAG & (!GenerateFlag(alarm_code));
+  //ALARM_FLAG = 0;// ALARM_FLAG & (~GenerateFlag(alarm_code));
+  ALARM_FLAG_SNOOZE = ALARM_FLAG & (~GenerateFlag(__ERROR_ALARM_PI));
+  ALARM_FLAG_SNOOZE_millis = millis();
+  ALARM_FLAG = 0;
 }
 
 
@@ -477,8 +480,11 @@ void ResetAlarm(int alarm_code)
 void CheckAlarmConditions(t_core__force_sm sm)
 {
   static t_core__force_sm last_sm;
- 
-
+  static uint32_t buzzer_time=0;
+  static bool buzzer_beep=false;
+  static uint8_t alarm_state=0;
+  static uint32_t led_time=0;
+  static bool led_on=false;
 
   //Over Pressure Input
   
@@ -502,7 +508,7 @@ void CheckAlarmConditions(t_core__force_sm sm)
   }
     
   //Occlusion complete 
-  if ((last_sm == FR_WAIT_INHALE_TIME) && (sm != last_sm))
+  /*if ((last_sm == FR_WAIT_INHALE_TIME) && (sm != last_sm))
   {
     if (fabs(pressure[1].last_pressure-pressure[0].last_pressure)< 0.2 * core_config.target_pressure )
       TriggerAlarm(ALARM_COMPLETE_OCCLUSION);
@@ -514,12 +520,229 @@ void CheckAlarmConditions(t_core__force_sm sm)
     if (fabs(pressure[1].last_pressure-pressure[0].last_pressure)< 0.8 * core_config.target_pressure )
       TriggerAlarm(ALARM_PARTIAL_OCCLUSION);
   }
-
+*/
   if (currentBatteryCharge<20)
     TriggerAlarm(BATTERY_LOW);
 
 
   last_sm = sm;
+
+  ALARM_FLAG = ALARM_FLAG & ( ~ALARM_FLAG_SNOOZE);
+
+  if (ALARM_FLAG!=0)
+  {
+    //ledcWrite(1, 128); 
+
+    if (millis()-led_time > 250)
+    {
+      led_time = millis();
+      led_on = led_on ? false:true;
+      digitalWrite(ALARM_LED, led_on); 
+    }
+
+    switch(alarm_state)
+    {
+      case 0:
+        buzzer_time=millis();
+        alarm_state=1;
+        digitalWrite(BUZZER, HIGH);            //#1
+        break;
+        
+      case 1:
+        if (millis()-buzzer_time > 150)
+        {
+          digitalWrite(BUZZER, LOW);
+          buzzer_time=millis();
+          alarm_state=2;
+        }
+        break;
+        
+      case 2:
+        if (millis()-buzzer_time > 100)
+        {
+          digitalWrite(BUZZER, HIGH);          //#2 
+          buzzer_time=millis();
+          alarm_state=3;
+        }
+        break;          
+         
+      case 3:
+        if (millis()-buzzer_time > 150)
+        {
+          digitalWrite(BUZZER, LOW);
+          buzzer_time=millis();
+          alarm_state=4;
+        }
+        break;   
+
+      case 4:
+        if (millis()-buzzer_time > 100)
+        {
+          digitalWrite(BUZZER, HIGH);          //#3
+          buzzer_time=millis();
+          alarm_state=5;
+        }
+        break;  
+
+      case 5:
+        if (millis()-buzzer_time > 150)
+        {
+          digitalWrite(BUZZER, LOW);          
+          buzzer_time=millis();
+          alarm_state=6;
+        }
+        break;   
+        
+      case 6:
+        if (millis()-buzzer_time > 300)
+        {
+          digitalWrite(BUZZER, HIGH);          //#4
+          buzzer_time=millis();
+          alarm_state=7;
+        }
+        break;     
+
+      case 7:
+        if (millis()-buzzer_time > 150)
+        {
+          digitalWrite(BUZZER, LOW);         
+          buzzer_time=millis();
+          alarm_state=8;
+        }
+        break;  
+
+      case 8:
+        if (millis()-buzzer_time > 100)
+        {
+          digitalWrite(BUZZER, HIGH);          //#5
+          buzzer_time=millis();
+          alarm_state=9;
+        }
+        break;    
+
+
+      case 9:
+        if (millis()-buzzer_time > 150)
+        {
+          digitalWrite(BUZZER, LOW);          
+          buzzer_time=millis();
+          alarm_state=10;
+        }
+        break;  
+
+      case 10:
+        if (millis()-buzzer_time > 800)
+        {
+          digitalWrite(BUZZER, HIGH);          //#5
+          buzzer_time=millis();
+          alarm_state=11;
+        }
+        break;    
+
+      case 11:
+        if (millis()-buzzer_time > 150)
+        {
+          digitalWrite(BUZZER, LOW);
+          buzzer_time=millis();
+          alarm_state=12;
+        }
+        break;
+        
+      case 12:
+        if (millis()-buzzer_time > 100)
+        {
+          digitalWrite(BUZZER, HIGH);          //#2 
+          buzzer_time=millis();
+          alarm_state=13;
+        }
+        break;          
+         
+      case 13:
+        if (millis()-buzzer_time > 150)
+        {
+          digitalWrite(BUZZER, LOW);
+          buzzer_time=millis();
+          alarm_state=14;
+        }
+        break;   
+
+      case 14:
+        if (millis()-buzzer_time > 100)
+        {
+          digitalWrite(BUZZER, HIGH);          //#3
+          buzzer_time=millis();
+          alarm_state=15;
+        }
+        break;  
+
+      case 15:
+        if (millis()-buzzer_time > 150)
+        {
+          digitalWrite(BUZZER, LOW);          
+          buzzer_time=millis();
+          alarm_state=16;
+        }
+        break;   
+        
+      case 16:
+        if (millis()-buzzer_time > 300)
+        {
+          digitalWrite(BUZZER, HIGH);          //#4
+          buzzer_time=millis();
+          alarm_state=17;
+        }
+        break;     
+
+      case 17:
+        if (millis()-buzzer_time > 150)
+        {
+          digitalWrite(BUZZER, LOW);         
+          buzzer_time=millis();
+          alarm_state=18;
+        }
+        break;  
+
+      case 18:
+        if (millis()-buzzer_time > 100)
+        {
+          digitalWrite(BUZZER, HIGH);          //#5
+          buzzer_time=millis();
+          alarm_state=19;
+        }
+        break;    
+
+
+      case 19:
+        if (millis()-buzzer_time > 150)
+        {
+          digitalWrite(BUZZER, LOW);          
+          buzzer_time=millis();
+          alarm_state=20;
+        }
+        break;  
+
+      case 20:
+        if (millis()-buzzer_time > 10000)
+        {
+           alarm_state=0;
+        }
+        break;    
+
+                                                     
+    }
+   
+  
+    
+  }
+  else
+  {
+    //ledcWrite(1, 0); 
+    digitalWrite(ALARM_LED, LOW);
+    digitalWrite(BUZZER, LOW);
+    alarm_state=0;
+    if (millis() > (ALARM_FLAG_SNOOZE_millis + 120000))
+      ALARM_FLAG_SNOOZE=0;
+  }
   
 }
 
@@ -839,6 +1062,8 @@ void InitParameters()
   core_config.flux_close = 5;
   core_config.assist_pressure_delta_trigger=15;
   core_config.target_pressure = 20;
+  core_config.target_pressure_auto = core_config.target_pressure;
+  core_config.target_pressure_assist = core_config.target_pressure;
 
   core_config.respiratory_rate = 15;
   core_config.respiratory_ratio = 0.66;
@@ -856,6 +1081,8 @@ void InitParameters()
 
   core_config.pid_limit=0.65;
   tidal_volume_c.AutoZero =1;
+
+  
 }
 
 void setup(void)
@@ -877,8 +1104,10 @@ void setup(void)
   //ledcWrite(1, 0);
   pinMode (VALVE_OUT_PIN, OUTPUT);
   pinMode (ALARM_LED, OUTPUT);
+  pinMode (BUZZER, OUTPUT);
   
   digitalWrite(ALARM_LED, LOW);
+  digitalWrite(BUZZER, LOW);
 
 
   // Start Serial
@@ -1082,7 +1311,8 @@ void SetCommandCallback(cmd* c) {
       core_config.assist_pressure_delta_trigger=numberValue;
       Serial.println("valore=OK");
     }    
-    
+
+   
     if (strPatam == "assist_flow_min")
     {
       float numberValue = value.getValue().toFloat();
@@ -1094,10 +1324,17 @@ void SetCommandCallback(cmd* c) {
     if (strPatam == "ptarget")
     {
       float numberValue = value.getValue().toFloat();
-      core_config.target_pressure  = numberValue;
+      core_config.target_pressure_auto  = numberValue;
       Serial.println("valore=OK");
     }  
 
+    if (strPatam == "pressure_support")
+    {
+      float numberValue = value.getValue().toFloat();
+      core_config.target_pressure_assist  = numberValue;
+      Serial.println("valore=OK");
+    }  
+    
     if (strPatam == "peep")
     {
       float numberValue = value.getValue().toFloat();
@@ -1187,6 +1424,7 @@ void SetCommandCallback(cmd* c) {
     {
       int numberValue = value.getValue().toInt();
       watchdog_time = millis();
+      ALARM_FLAG = ALARM_FLAG & (~GenerateFlag(__ERROR_WDOG_PI));
       Serial.println("valore=OK");
     }  
 
@@ -1208,8 +1446,24 @@ void SetCommandCallback(cmd* c) {
     {
       int numberValue = value.getValue().toInt();
       __WDENABLE = numberValue != 0 ? true:false;
+      ALARM_FLAG = ALARM_FLAG & (~GenerateFlag(__ERROR_ALARM_PI));
       Serial.println("valore=OK");
     }          
+
+    if (strPatam == "backup_enable")
+    {
+      int numberValue = value.getValue().toInt();
+      core_config.backup_enable = numberValue ? true:false;
+      Serial.println("valore=OK");
+    }          
+
+    if (strPatam == "backup_min_rate")
+    {
+      float numberValue = value.getValue().toFloat();
+      core_config.backup_min_rate = numberValue;
+      Serial.println("valore=OK");
+    }   
+
 
   if (strPatam == "stats_clear")
   {
@@ -1231,15 +1485,7 @@ void GetCommandCallback(cmd* c) {
 
     //Serial.println("CMD: " +  param.getValue() + " " +  value.getValue());
 
-    if (strPatam == "run")
-    {
-      Serial.println("valore="+String(core_config.run?1:0));
-    }
-    
-    if (strPatam == "mode")
-    {
-      Serial.println("valore="+String(core_config.BreathMode == M_BREATH_ASSISTED?1:0));
-    }
+
 
     if (strPatam == "pressure")
     {
@@ -1306,10 +1552,53 @@ void GetCommandCallback(cmd* c) {
     {
       Serial.println("valore="+String(0) );
     }    
+
     
+    if (strPatam == "run")
+    {
+      Serial.println("valore="+String(core_config.run?1:0));
+    }
+    
+    if (strPatam == "mode")
+    {
+      Serial.println("valore="+String(core_config.BreathMode == M_BREATH_ASSISTED?1:0));
+    }
+    if (strPatam == "rate")
+    {
+      Serial.println("valore="+String(core_config.respiratory_rate) );
+    }    
+    if (strPatam == "ratio")
+    {
+      Serial.println("valore="+String(core_config.respiratory_ratio) );
+    }    
+    if (strPatam == "assist_ptrigger")    
+    {
+      Serial.println("valore="+String(core_config.assist_pressure_delta_trigger) );
+    }    
+    if (strPatam == "assist_flow_min")
+    {
+      Serial.println("valore="+String(core_config.flux_close) );
+    }    
+    if (strPatam == "ptarget")
+    {
+      Serial.println("valore="+String(core_config.target_pressure_auto) );
+    }    
+    if (strPatam == "pressure_support")
+    {
+      Serial.println("valore="+String(core_config.target_pressure_assist) );
+    }    
+    if (strPatam == "backup_enable")
+    {
+      Serial.println("valore="+String(core_config.backup_enable ? 1:0) );
+    }
+    if (strPatam == "backup_min_rate")
+    {
+      Serial.println("valore="+String(core_config.backup_min_rate) );
+    }    
+
     if (strPatam == "all")
     {
-      Serial.println("valore="+String(pressure[0].last_pressure) + "," + 
+      Serial.println("valore="+String(pressure[1].last_pressure) + "," + 
             String(tidal_volume_c.FLUX) + "," + String(last_O2) + "," + String(last_bpm)
             + "," + String(tidal_volume_c.TidalVolume) + "," + String(last_peep)
             + "," + String(temperature) + "," + String(batteryPowered?1:0) + "," + String(currentBatteryCharge) 
@@ -1535,6 +1824,8 @@ void loop() {
   static float old_delta;  
   static float pplow_old;
 
+  core_config.target_pressure = core_config.BreathMode == M_BREATH_FORCED ? core_config.target_pressure_auto : core_config.target_pressure_assist;
+  
   //Check connection with raspberry when RUN
   if (__CONSOLE_MODE==false)
   {
