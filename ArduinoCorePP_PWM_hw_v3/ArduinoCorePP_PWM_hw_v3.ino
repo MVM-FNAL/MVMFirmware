@@ -70,7 +70,8 @@ typedef enum {
     AST_WAIT_FLUX_DROP,
     AST_WAIT_FLUX_DROP_b,
     AST_DEADTIME,
-    AST_PAUSE_EXHALE
+    AST_PAUSE_EXHALE,
+    AST_PAUSE_EXHALEb
 } t_core__force_sm;
 
 typedef enum {
@@ -299,6 +300,8 @@ uint32_t watchdog_time = 0;
 float last_O2 = 21.7;
 
 bool use_Sensirion_Backup = false;
+
+float dt_veturi_100ms=0;
 
 int read_pressure_sensor(int idx);
 int valve_contol(valves valve, int level);
@@ -709,6 +712,9 @@ void onTimerCoreTask()
             //RUN RESPIRATORY
             if (core_config.BreathMode == M_BREATH_FORCED) {
                 //AUTOMATIC
+                PRES_SENS_CT[2].ZERO += dt_veturi_100ms;
+                
+                
                 if (tidal_volume_c.TidalCorrection > 0) {
                     currentTvEsp = -1.0 * tidal_volume_c.ExpVolumeVenturi / tidal_volume_c.TidalCorrection;
                 }
@@ -743,8 +749,22 @@ void onTimerCoreTask()
                     valve_contol(VALVE_OUT, VALVE_OPEN);
                     dbg_trigger = 0;
                     //Trigger for assist breathing
-                    if (((-1.0 * delta2) > core_config.assist_pressure_delta_trigger) && (delta < 0)) {
+                    bool backup_trigger = false;
+
+                    if (core_config.backup_enable)
+                    {
+                      float dt = millis() - last_start;
+                      float dr = 60000.0;
+                      if (dt!=0)
+                        dr=60000.0/dt;
+                      if (dr<core_config.backup_min_rate)
+                      {
+                        backup_trigger=true;
+                      }
+                    }
+                    if ((((-1.0 * delta2) > core_config.assist_pressure_delta_trigger) && (delta < 0)) || (backup_trigger==true)) {
                         dbg_trigger = 1;
+                        PRES_SENS_CT[2].ZERO += dt_veturi_100ms;
                         if (tidal_volume_c.TidalCorrection > 0) {
                             currentTvEsp = -1.0 * tidal_volume_c.ExpVolumeVenturi / tidal_volume_c.TidalCorrection;
                         }
@@ -760,6 +780,8 @@ void onTimerCoreTask()
                             last_bpm = 60000.0 / last_delta_time;
                             averaged_bpm = averaged_bpm * 0.6 + last_bpm;
                         }
+
+       
 
                         TidalInhale();
                         fluxpeak = 0;
@@ -895,7 +917,7 @@ void onTimerCoreTask()
             }
             else {
                 CoreSM_FORCE_ChangeState(&core_sm_context.force_sm,
-                    FR_OPEN_INVALVE);
+                    AST_PAUSE_EXHALE);
             }
             DBG_print(3, "AST_DEADTIME");
         }
@@ -909,12 +931,21 @@ void onTimerCoreTask()
         }
         else {
             if (((-1.0 * delta2) > core_config.assist_pressure_delta_trigger) && (delta < 0)) {
+                PRES_SENS_CT[2].ZERO += dt_veturi_100ms;
                 valve_contol(VALVE_IN, VALVE_CLOSE);
                 valve_contol(VALVE_OUT, VALVE_CLOSE);
+                CoreSM_FORCE_ChangeState(&core_sm_context.force_sm,
+                    AST_PAUSE_EXHALEb);
             }
         }
         break;
-
+        
+    case AST_PAUSE_EXHALEb:
+        if (core_config.pause_exhale == false) {
+            CoreSM_FORCE_ChangeState(&core_sm_context.force_sm,
+                FR_OPEN_INVALVE);
+        }
+        break;
     default:
         dbg_state_machine = 1000;
         TriggerAlarm(UNPREDICTABLE_CODE_EXECUTION);
@@ -1306,6 +1337,7 @@ void SetCommandCallback(cmd* c)
 
     if (strPatam == "backup_min_rate") {
         float numberValue = value.getValue().toFloat();
+        numberValue = numberValue<1?1:numberValue;
         core_config.backup_min_rate = numberValue;
         Serial.println("valore=OK");
     }
@@ -1605,6 +1637,7 @@ void PressureControlLoop_PRESSIN()
 void loop()
 {
     static float pmem[6];
+    static float vmem[6];
     static float VenturiFlux;
     static uint32_t last_loop_time;
     static uint8_t RestStateMachine = 0;
@@ -1713,12 +1746,24 @@ void loop()
         case 2:
             tidal_volume_c.ExpVolumeVenturi += vf;
             if (tidal_volume_c.TidalCorrection > 0) {
-                tidal_volume_c.TidalVolume += (vf / tidal_volume_c.TidalCorrection) * tidal_volume_c.AutoZero;
+                float vf_clamp;
+                vf_clamp = fabs(vf)>0.1?vf:0;
+                tidal_volume_c.TidalVolume += (vf_clamp / tidal_volume_c.TidalCorrection) * tidal_volume_c.AutoZero;
                 tidal_volume_c.FLUX = (VenturiFlux / tidal_volume_c.TidalCorrection);
             }
             break;
         }
 
+
+        vmem[5] = vmem[4];
+        vmem[4] = vmem[3];
+        vmem[3] = vmem[2];
+        vmem[2] = vmem[1];
+        vmem[1] = vmem[0];
+        vmem[0] = dp;
+        
+        dt_veturi_100ms = vmem[5];        
+        
         StatsUpdate();
         i2c_MuxSelect(IIC_MUX_P_FASTLOOP);
     }
@@ -2146,6 +2191,7 @@ void TidalExhale()
 
     tidal_volume_c.TidalStatus = 2;
 }
+
 
 void ResetStats()
 {
