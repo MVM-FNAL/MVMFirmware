@@ -1,4 +1,4 @@
-#define _FIRMWARE_VERSION_ "HW_V3_2020_04_08_00"
+#define _FIRMWARE_VERSION_ "HW_V3_2020_04_15_00"
 
 //PID  
 //resistenza 5- 20
@@ -69,14 +69,13 @@ uint32_t ALARM_FLAG_SNOOZE_millis =0;
 
 typedef enum {
   FR_OPEN_INVALVE, 
-  FR_WAIT_INHALE_PRESSURE, 
-  FR_WAIT_INHALE_PRESSURE_EXTRA, 
   FR_WAIT_INHALE_TIME, 
-  FR_OPEN_OUTVALVE, 
-  FR_WAIT_EXHALE_PRESSURE, 
-  FR_WAIT_EXHALE_PRESSURE_EXTRA, 
-  FR_WAIT_EXHALE_TIME,
-  FR_ASSIST_DEADTIME
+  FR_WAIT_EXHALE_TIME, 
+  AST_WAIT_MIN_INHALE_TIME, 
+  AST_WAIT_FLUX_DROP, 
+  AST_WAIT_FLUX_DROP_b, 
+  AST_DEADTIME, 
+  AST_PAUSE_EXHALE
   } t_core__force_sm;
   
 typedef enum {
@@ -99,18 +98,13 @@ typedef enum {
   } t_ALARM;
 typedef enum {VALVE_IN, VALVE_OUT} valves;
 
-
-bool __WDENABLE=false;
-bool __CONSOLE_MODE=false;
-bool __ADDTimeStamp=true;
-uint32_t watchdog_time =0;
-float last_O2=21.7;
+typedef enum {M_BREATH_FORCED, M_BREATH_ASSISTED} t_assist_mode;
+typedef enum {DS_01, GS_05} t_ps_sensor;
 
 // The port to listen for incoming TCP connections
 
 
 Ticker CoreTask;
-// Create aREST instance
 
 // Create CLI Object
 SimpleCLI cli;
@@ -118,11 +112,11 @@ SimpleCLI cli;
 Command param_set;
 Command param_get;
 
-// Variables to be exposed to the API
+SfmConfig sfm3019_inhale;
 
 bool in_pressure_alarm=false;
 
-typedef enum {M_BREATH_FORCED, M_BREATH_ASSISTED} t_assist_mode;
+
 struct
 {
   bool run;
@@ -169,6 +163,9 @@ struct
 
   bool    backup_enable;
   float  backup_min_rate;
+
+  float pause_lg_timer;
+  bool pause_lg;
   
 } core_config;
 
@@ -221,101 +218,6 @@ typedef struct
 
 t_tidal_volume_c tidal_volume_c;
 
-typedef enum {DS_01, GS_05} t_ps_sensor;
-t_ps_sensor pressure_sensor_type []= {DS_01, DS_01, DS_01, DS_01};
-
-uint8_t pressure_sensor_i2c_address [] = {0x76, 0x77, 0x76, 0x77};
-uint8_t pressure_sensor_i2c_mux [] = {IIC_MUX_P_FASTLOOP, IIC_MUX_P_FASTLOOP, IIC_MUX_P_2, IIC_MUX_P_2};
-
-uint8_t flow_sensor_i2c_address [] = {0x40};
-t_5525DSO_calibration_table PRES_SENS_CT[N_PRESSURE_SENSORS];
-
-// Declare functions to be exposed to the API
-int API_RUN_Control(String command);
-int API_SET_inhale_ms(String command);
-int API_SET_exhale_ms(String command);
-int API_SET_inhale_critical_alarm_ms(String command);
-int API_SET_exhale_critical_alarm_ms(String command);
-int API_SET_pressure_forced_inhale_max(String command);
-int API_SET_pressure_forced_exhale_min(String command);
-int API_SET_pressure_drop(String command);
-int API_SET_control_mode(String command);
-int API_SET_assist_pressure_delta_trigger(String command);
-int API_SET_inhale_ms_extra(String command);
-int API_SET_costant_rate(String command);
-
-int read_pressure_sensor(int idx);
-int valve_contol(valves valve, int level);
-void CoreSM_FORCE_ChangeState(t_core__force_sm *sm, t_core__force_sm NEW_STATE);
-void DBG_print(int level, String str);
-void TriggerAlarm(t_ALARM Alarm);
-
-void CalibrateDate_5525DSO(t_5525DSO_calibration_table CT, int32_t raw_temp, int32_t raw_pressure, float *T, float *P);
-bool Convert_5525DSO(int address, int32_t *temp, int32_t *pressure, bool read_temp);
-bool Reset_5525DSO(int address);
-bool ReadCalibration_5525DSO(int address, t_5525DSO_calibration_table *ct);
-bool FirstConversion_5525DSO(int address);
-void SimulationFunction();
-bool MeasureFlux(float *Flow);
-void MeasureFluxInit();
-void PressureControlLoop_PRESSIN();
-void SetCommandCallback(cmd* c);
-void GetCommandCallback(cmd* c);
-void CliErrorCallback(cmd_error* e);
-
-void MeasureFluxInit3019(uint8_t address);
-bool MeasureFluxReadOffsetScale3019(uint8_t address, int16_t* flow_scale, int16_t* flow_offset, uint16_t* unit);
-
-
-bool MeasureFlux_SFM3019(SfmConfig *sfm3019, float *Flow, float *T);
-bool InitFlowMeter_SFM3019(SfmConfig *sfm3019);
-void i2c_MuxSelect(uint8_t i);
-
-void TidalReset();
-void TidalInhale();
-void TidalExhale();
-
-
-void ResetStats();
-void ResetStatsBegin();
-void StatPhaseExpire();
-void StatEndCycle();
-void StatsUpdate(); 
-
-int valve1_status = 0;
-int valve2_status = 0;
-
-float Pset = 0;
-
-float PIDMonitor = 0;
-float PIDMonitor2 = 0;
-
-bool peep_look=false;
-
-float last_peep=0;
-float last_bpm=0;
-float averaged_bpm=0;
-float temperature=0;    
-
-
-float CURRENT_PSET=0;
-
-
-bool  batteryPowered=false;
-float currentBatteryCharge=100;
-
-
-float currentP_Peak=0;
-float currentTvIsnp=0;
-float currentTvEsp=0;
-float currentVM=0;
-
-bool use_Sensirion_Backup=false;
-
-
-
-SfmConfig sfm3019_inhale;
-
 
 
 typedef struct
@@ -357,6 +259,109 @@ typedef struct
 } t_stat_param;
 t_stat_param __stat_param;
   
+
+
+t_ps_sensor pressure_sensor_type []= {DS_01, DS_01, DS_01, DS_01};
+
+uint8_t pressure_sensor_i2c_address [] = {0x76, 0x77, 0x76, 0x77};
+uint8_t pressure_sensor_i2c_mux [] = {IIC_MUX_P_FASTLOOP, IIC_MUX_P_FASTLOOP, IIC_MUX_P_2, IIC_MUX_P_2};
+
+uint8_t flow_sensor_i2c_address [] = {0x40};
+t_5525DSO_calibration_table PRES_SENS_CT[N_PRESSURE_SENSORS];
+
+
+int valve1_status = 0;
+int valve2_status = 0;
+
+float Pset = 0;
+
+float PIDMonitor = 0;
+float PIDMonitor2 = 0;
+
+bool peep_look=false;
+
+float last_peep=0;
+float last_bpm=0;
+float averaged_bpm=0;
+float temperature=0;    
+
+
+bool  batteryPowered=false;
+float currentBatteryCharge=100;
+
+float currentP_Peak=0;
+float currentTvIsnp=0;
+float currentTvEsp=0;
+float currentVM=0;
+
+
+
+int dbg_state_machine =0;
+float dgb_delta;
+int dbg_trigger;
+float dgb_peaktime;
+float fluxpeak=0;
+float pres_peak=0;
+unsigned long peaktime=0;
+
+float pplow=0;
+
+static float delta =  0;
+static float delta2 = 0;
+
+
+bool __WDENABLE=false;
+bool __CONSOLE_MODE=false;
+bool __ADDTimeStamp=true;
+
+uint32_t watchdog_time =0;
+float last_O2=21.7;
+
+bool use_Sensirion_Backup=false;
+
+
+
+
+int read_pressure_sensor(int idx);
+int valve_contol(valves valve, int level);
+void CoreSM_FORCE_ChangeState(t_core__force_sm *sm, t_core__force_sm NEW_STATE);
+void DBG_print(int level, String str);
+void TriggerAlarm(t_ALARM Alarm);
+
+void CalibrateDate_5525DSO(t_5525DSO_calibration_table CT, int32_t raw_temp, int32_t raw_pressure, float *T, float *P);
+bool Convert_5525DSO(int address, int32_t *temp, int32_t *pressure, bool read_temp);
+bool Reset_5525DSO(int address);
+bool ReadCalibration_5525DSO(int address, t_5525DSO_calibration_table *ct);
+bool FirstConversion_5525DSO(int address);
+
+bool MeasureFlux(float *Flow);
+void MeasureFluxInit();
+void PressureControlLoop_PRESSIN();
+void SetCommandCallback(cmd* c);
+void GetCommandCallback(cmd* c);
+void CliErrorCallback(cmd_error* e);
+
+void MeasureFluxInit3019(uint8_t address);
+bool MeasureFluxReadOffsetScale3019(uint8_t address, int16_t* flow_scale, int16_t* flow_offset, uint16_t* unit);
+
+
+bool MeasureFlux_SFM3019(SfmConfig *sfm3019, float *Flow, float *T);
+bool InitFlowMeter_SFM3019(SfmConfig *sfm3019);
+void i2c_MuxSelect(uint8_t i);
+
+void TidalReset();
+void TidalInhale();
+void TidalExhale();
+
+
+void ResetStats();
+void ResetStatsBegin();
+void StatPhaseExpire();
+void StatEndCycle();
+void StatsUpdate(); 
+
+
+
 void DBG_print(int level, String str)
 {
   if (level<=VERBOSE_LEVEL)
@@ -746,293 +751,287 @@ void CheckAlarmConditions(t_core__force_sm sm)
   
 }
 
-int dbg_state_machine =0;
-float dgb_delta;
-int dbg_trigger;
-float dgb_peaktime;
-float fluxpeak=0;
-float pres_peak=0;
-unsigned long peaktime=0;
 
-float pplow=0;
-
-  static float delta =  0;
-  static float delta2 = 0;
 
 void  onTimerCoreTask(){
-  static float old_pressure[256];
-//  static float old_delta;  
-//  static float pplow_old;
+	static float old_pressure[256];
+  static float last_isp_time;
 
-  static int timer_divider =0;
+	static int timer_divider =0;
 
-  
-                
-  //static float delta =  0;
-  //static float delta2 = 0;
-  static uint32_t last_start = 0;
 
-  /*if (++timer_divider>=100/TIMERCORE_INTERVAL_MS)
-  {
-                    
-    delta =  pplow -  pplow_old ;
-    delta2 = (delta-old_delta)*100;
-    pplow_old = pplow;
-    old_delta = delta;
-    dgb_delta=delta2; 
-    timer_divider=0;
-  } 
-  */
-  
-  DBG_print(10,"ITimer0: millis() = " + String(millis()));
+	static uint32_t last_start = 0;
 
-  for (int q=0;q<255;q++)
-  {
-    old_pressure[255-q] = old_pressure[254-q];
-  }
-  old_pressure[0] = pressure[1].last_pressure;
 
-  float mean_peep = (old_pressure[5] + old_pressure[6] + old_pressure[7] + old_pressure[8]+ old_pressure[9])/5.0;
-  float mean_peep_older = (old_pressure[25] + old_pressure[26] + old_pressure[27] + old_pressure[28]+ old_pressure[29])/5.0;
+	DBG_print(10,"ITimer0: millis() = " + String(millis()));
 
-    core_sm_context.timer1++;
-    core_sm_context.timer2++;
+	for (int q=0;q<255;q++)
+	{
+	old_pressure[255-q] = old_pressure[254-q];
+	}
+	old_pressure[0] = pressure[1].last_pressure;
+
+	float mean_peep = (old_pressure[5] + old_pressure[6] + old_pressure[7] + old_pressure[8]+ old_pressure[9])/5.0;
+	float mean_peep_older = (old_pressure[25] + old_pressure[26] + old_pressure[27] + old_pressure[28]+ old_pressure[29])/5.0;
+
+	core_sm_context.timer1++;
+	core_sm_context.timer2++;
     
+	switch(core_sm_context.force_sm)
+	{
+	case FR_OPEN_INVALVE:
+	  dbg_state_machine =0;
+	  if (core_config.run)
+	  { 
+		//RUN RESPIRATORY
+		if (core_config.BreathMode == M_BREATH_FORCED)
+		{
+		  //AUTOMATIC
+		  if (tidal_volume_c.TidalCorrection>0)
+		  {
+			currentTvEsp=-1.0*tidal_volume_c.ExpVolumeVenturi/  tidal_volume_c.TidalCorrection;
+		  }
 
-    
-    SimulationFunction();
+		  ResetStats();
+		  TidalReset();
+		  last_peep = mean_peep;
+		  pres_peak=0;
 
-  
-      switch(core_sm_context.force_sm)
-      {
-        case FR_OPEN_INVALVE:
-         
-          dbg_state_machine =0;
-          if (core_config.run)
-          {
-              
-            if (core_config.BreathMode == M_BREATH_FORCED)
-            {
-              if (tidal_volume_c.TidalCorrection>0)
-              {
-                currentTvEsp=-1.0*tidal_volume_c.ExpVolumeVenturi/  tidal_volume_c.TidalCorrection;
-              }
-        
-              ResetStats();
-               TidalReset();
-              last_peep = mean_peep;
-              pres_peak=0;
+		  float last_delta_time = millis() - last_start;
+		  last_start=millis();
+		  if (last_delta_time > 0)
+		  {
+			last_bpm = 60000.0/last_delta_time;
+			averaged_bpm = averaged_bpm*0.6 + last_bpm;
+		  }
+		  
+		  TidalInhale();
+		  fluxpeak=0;
+		  peaktime=millis();
 
-              float last_delta_time = millis() - last_start;
-              last_start=millis();
-              if (last_delta_time > 0)
-              {
-                last_bpm = 60000.0/last_delta_time;
-              }
-                
-               TidalInhale();
+		  valve_contol(VALVE_IN, VALVE_OPEN);
+		   
+		  core_sm_context.timer1 =1;
+		  CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, 
+			  FR_WAIT_INHALE_TIME);
+		  DBG_print(3,"FR_OPEN_INVALVE");
+		}
+		else
+		{
+		  //ASSISTED
+		  if (core_config.BreathMode == M_BREATH_ASSISTED)
+		  {
+			pres_peak=0;
+			valve_contol(VALVE_OUT, VALVE_OPEN);
+			dbg_trigger=0;
+			//Trigger for assist breathing
+			if (((-1.0*delta2) > core_config.assist_pressure_delta_trigger) && (delta<0))
+			{
+			  dbg_trigger=1;
+			  if (tidal_volume_c.TidalCorrection>0)
+			  {
+				currentTvEsp=-1.0*tidal_volume_c.ExpVolumeVenturi/  tidal_volume_c.TidalCorrection;
+			  }
+			  StatEndCycle();  
+			  ResetStats();
+			  TidalReset();
+			  last_peep = mean_peep;
+				
+			  float last_delta_time = millis() - last_start;
+			  last_start=millis();
+				  
+			  if (last_delta_time > 0)
+			  {
+				last_bpm = 60000.0/last_delta_time;
+				averaged_bpm = averaged_bpm*0.6 + last_bpm;
+			  }
+			  
+			  TidalInhale();      
+			  fluxpeak=0;
+			  peaktime=0;
+			  valve_contol(VALVE_IN, VALVE_OPEN);
+			  valve_contol(VALVE_OUT, VALVE_CLOSE);
+			  core_sm_context.timer1 =1;
 
-               fluxpeak=0;
-                peaktime=millis();
-              //FORCE BREATHING MODE
-              DBG_print(3,"FR_OPEN_INVALVE");
-               core_sm_context.timer1 =1;
-               CURRENT_PSET = core_config.target_pressure;
-              valve_contol(VALVE_IN, VALVE_OPEN);
-              
-              if (core_config.constant_rate_mode)
-                CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_WAIT_INHALE_TIME);
-              else
-                CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_WAIT_INHALE_PRESSURE);
-    
-              //core_sm_context.timer1 =0;
-              DBG_print(3,"FR_WAIT_INHALE_PRESSURE");
-            }
-            else  
-            {
-              //ASSISTED BREATHING MODE
-             pres_peak=0;
+			  CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, 
+				  AST_WAIT_MIN_INHALE_TIME);
+		 
+			  DBG_print(3,"FR_OPEN_INVALVE");                
+			}
+		  }
+		  else
+		  {
+			//WE SHOULD NEVER GO HERE
+			TriggerAlarm(UNPREDICTABLE_CODE_EXECUTION); 
+		  }
+		}
+	  }
+	  else
+	  {
+		//WE ARE NOT RUNNING
+		valve_contol(VALVE_IN, VALVE_CLOSE);
+		valve_contol(VALVE_OUT, VALVE_OPEN);
+	  }
+    break;
 
-              
-              valve_contol(VALVE_OUT, VALVE_OPEN);
-              dbg_trigger=0;
+	case FR_WAIT_INHALE_TIME:
+	  dbg_state_machine =1;
+	  if (core_sm_context.timer1>= (core_config.inhale_ms/TIMERCORE_INTERVAL_MS))
+	  {
+		if ((core_config.pause_inhale==false) &&
+			(core_config.pause_lg==false))
+		{
+		  core_sm_context.timer1 =0;
+		  TidalExhale();
+		  StatPhaseExpire();
+		  
+		  currentP_Peak=pres_peak;
+		  currentTvIsnp=tidal_volume_c.InspVolumeSensirion;
+		  currentVM=fluxpeak;
+		  
+		  valve_contol(VALVE_IN, VALVE_CLOSE);
+		  valve_contol(VALVE_OUT, VALVE_OPEN);
+		  
+		  CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, 
+			FR_WAIT_EXHALE_TIME);
+		  DBG_print(3,"FR_WAIT_INHALE_TIME");
+		}
+		else
+		{
+		  if (core_config.pause_lg==false)
+			valve_contol(VALVE_IN, VALVE_CLOSE);
+		  else
+		  {
+			core_config.pause_lg_timer -= TIMERCORE_INTERVAL_MS;
+			if (core_config.pause_lg_timer <= 0)
+			  core_config.pause_lg = false;
+		  }
+		}
+	   
+	  }
+	  break;
+	  
+	case FR_WAIT_EXHALE_TIME:
+	  dbg_state_machine =2;
+			 
+		  if (core_sm_context.timer1>= (core_config.exhale_ms/TIMERCORE_INTERVAL_MS)) 
+		  {
+			  if (core_config.pause_exhale==false)
+			  {
+		  StatEndCycle();    
+		  peep_look=false;
+		  
+		  valve_contol(VALVE_OUT, VALVE_CLOSE);
+		  CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, 
+			  FR_OPEN_INVALVE);
 
-              
-              if (((-1.0*delta2) > core_config.assist_pressure_delta_trigger) && (delta<0))
-              //if (mean_peep_older-pressure[1].last_pressure >  core_config.assist_pressure_delta_trigger)
-              {
-                
-                currentTvEsp=tidal_volume_c.ExpVolumeVenturi;
-                 ResetStats();
-                 TidalReset();
-                last_peep = mean_peep;
-          
-  
-                float last_delta_time = millis() - last_start;
-                      last_start=millis();
-                if (last_delta_time > 0)
-                {
-                  last_bpm = 60000.0/last_delta_time;
-                  averaged_bpm = averaged_bpm*0.6 + last_bpm;
-                }
-                
-                TidalInhale();
-          
-                dbg_trigger=1;
-                fluxpeak=0;
-                peaktime=0;
-                DBG_print(3,"FR_OPEN_INVALVE");
-                valve_contol(VALVE_IN, VALVE_OPEN);
-                valve_contol(VALVE_OUT, VALVE_CLOSE);
-                 core_sm_context.timer1 =1;
-                if (core_config.constant_rate_mode)
-                  CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_WAIT_INHALE_TIME);
-                else
-                  CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_WAIT_INHALE_PRESSURE);
-     
-                DBG_print(3,"FR_WAIT_INHALE_PRESSURE");                
-              }
-            }
-          }
-          break;
-  
-        case FR_WAIT_INHALE_PRESSURE:
-         if (core_sm_context.timer1 > 300/TIMERCORE_INTERVAL_MS)
-         {
-           if (pressure[1].last_pressure >= core_config.target_pressure * 0.5)
-           {
-                
-                core_sm_context.timer2 = 0; 
-                core_sm_context.timer1 =0;
-                CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_WAIT_INHALE_PRESSURE_EXTRA);
-                DBG_print(3,"FR_WAIT_INHALE_PRESSURE_EXTRA");  
-           }
-         }
-              
-          dbg_state_machine =1;
-         
-          
-          break;
-  
-        case FR_WAIT_INHALE_PRESSURE_EXTRA:
-            dbg_state_machine =2;
+		  DBG_print(3,"FR_WAIT_EXHALE_TIME");
+			  }
+			  else
+			  {
+				valve_contol(VALVE_OUT, VALVE_CLOSE);
+			  }
+		  } 
+	  break;
+	  
+	case AST_WAIT_MIN_INHALE_TIME:
+	  dbg_state_machine =3;
+		if (core_sm_context.timer1 > 300/TIMERCORE_INTERVAL_MS)
+		  {
+		if (pressure[1].last_pressure >= core_config.target_pressure * 0.5)
+		{    
+				  CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, 
+			AST_WAIT_FLUX_DROP);
+				  DBG_print(3,"AST_WAIT_MIN_INHALE_TIME");  
+		}
+		  }
+		  break;
+	  
+	case AST_WAIT_FLUX_DROP:
+	  dbg_state_machine =4;
 
-            if ( (gasflux[0].last_flux <= (core_config.flux_close * fluxpeak)/100.0 ) && (core_config.pause_inhale==false))
-            {
-              TidalExhale();
-              StatPhaseExpire();
-              valve_contol(VALVE_IN, VALVE_CLOSE);
-              valve_contol(VALVE_OUT, VALVE_OPEN);
-              CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_WAIT_INHALE_TIME);
-              DBG_print(3,"FR_OPEN_OUTVALVE");
-            }
-          break;
-          
-        case FR_WAIT_INHALE_TIME:
-            dbg_state_machine =3;
-            if ((core_sm_context.timer1>= (core_config.inhale_ms/TIMERCORE_INTERVAL_MS)) && (core_config.pause_inhale==false))
-            {
-             
-               core_sm_context.timer1 =0;
-              if (core_config.constant_rate_mode)
-              {
-                TidalExhale();
-                StatPhaseExpire();
-       
-                currentP_Peak=pres_peak;
-                currentTvIsnp=tidal_volume_c.InspVolumeSensirion;
-                currentVM=fluxpeak;
-                valve_contol(VALVE_IN, VALVE_CLOSE);
-                valve_contol(VALVE_OUT, VALVE_OPEN);
-                CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_WAIT_EXHALE_TIME);
-              }
-              else
-              {
-                 CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_OPEN_OUTVALVE);
-              }
-              DBG_print(3,"FR_OPEN_OUTVALVE");
-            }
-
-          break;
-        
-        case FR_OPEN_OUTVALVE:
-          dbg_state_machine =4;
-          valve_contol(VALVE_OUT, VALVE_OPEN);
-        
-            
-            //CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_WAIT_EXHALE_TIME);
-            if (core_config.constant_rate_mode)
-              CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_WAIT_EXHALE_TIME);
-            else
-            {
-              CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_WAIT_EXHALE_PRESSURE);
-              core_sm_context.timer2 =0;
-            }
-          
-          core_sm_context.timer1 =0;
-          DBG_print(3,"FR_WAIT_EXHALE_TIME");
-          
-          break;
-  
-        case FR_WAIT_EXHALE_PRESSURE:
-          dbg_state_machine =5;
-          
-          if (core_sm_context.timer2  > 300/TIMERCORE_INTERVAL_MS)
-          {
-            if (core_config.BreathMode == M_BREATH_FORCED)
-            {
-                CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_WAIT_EXHALE_TIME);
-            }
-            else
-            {
-                CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_ASSIST_DEADTIME);  
-            }
-            core_sm_context.timer1 =0;
-            DBG_print(3,"FR_WAIT_EXHALE_TIME");
-          }
-         
-          break;
-  
-        case FR_WAIT_EXHALE_TIME:
-          dbg_state_machine =6;
-           
-          if (core_sm_context.timer1>= (core_config.exhale_ms/TIMERCORE_INTERVAL_MS)) 
-          {
-            if (core_config.pause_exhale==false)
-            {
-              StatEndCycle();    
-              peep_look=false;
-              if (core_config.BreathMode == M_BREATH_FORCED)
-                valve_contol(VALVE_OUT, VALVE_CLOSE);
-              CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_OPEN_INVALVE);
-              if (core_config.constant_rate_mode)
-                  valve_contol(VALVE_OUT, VALVE_CLOSE);
-                  
-              DBG_print(3,"FR_OPEN_INVALVE");
-            }
-            else
-            {
-              valve_contol(VALVE_OUT, VALVE_CLOSE);
-            }
-          }
-          break;
-        
-        case FR_ASSIST_DEADTIME:
-          dbg_state_machine =6;
-          if (core_sm_context.timer1>= (300/TIMERCORE_INTERVAL_MS)) 
-          {
-            CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_OPEN_INVALVE);  
-            StatEndCycle();    
-          }
-          break;
-
-        default:
-          TriggerAlarm(UNPREDICTABLE_CODE_EXECUTION);
-          CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_OPEN_INVALVE);
-          break;
-      }
-   
-    CheckAlarmConditions(core_sm_context.force_sm);
+		  if (gasflux[0].last_flux <= (core_config.flux_close * fluxpeak)/100.0 ) 
+		  {
+      last_isp_time= core_sm_context.timer1;
+		CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, 
+		  AST_WAIT_FLUX_DROP_b);
+		DBG_print(3,"FR_WAIT_FLUX_DROP");
+		  }
+		  break;
+	  
+	case AST_WAIT_FLUX_DROP_b:  
+	  dbg_state_machine =5;
+	  if ((core_config.pause_inhale==false) &&
+		  (core_config.pause_lg==false))
+		  {
+		core_sm_context.timer1 =1;
+		TidalExhale();
+		StatPhaseExpire();
+		currentP_Peak=pres_peak;
+		currentTvIsnp=tidal_volume_c.InspVolumeSensirion;
+		currentVM=fluxpeak;     
+		valve_contol(VALVE_IN, VALVE_CLOSE);
+		valve_contol(VALVE_OUT, VALVE_OPEN);
+		CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, 
+		  AST_DEADTIME);
+		DBG_print(3,"FR_WAIT_FLUX_DROP_b"); 
+	  }
+	  else
+	  {
+		if (core_config.pause_lg==false)
+		  valve_contol(VALVE_IN, VALVE_CLOSE);
+		else
+		{
+		  core_config.pause_lg_timer -= TIMERCORE_INTERVAL_MS;
+		  if (core_config.pause_lg_timer <= 0)
+			core_config.pause_lg = false;
+		}     
+	  }
+	  break;
+	  
+	  
+	case AST_DEADTIME:  
+	  dbg_state_machine =6;
+	  if (core_sm_context.timer1>= last_isp_time) 
+		  {
+		if (core_config.pause_exhale==false)
+			  {
+		  CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, 
+			FR_OPEN_INVALVE);  
+		}
+		else
+		{
+		  CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, 
+			FR_OPEN_INVALVE);  
+		}
+		DBG_print(3,"AST_DEADTIME");   
+		  }
+	  break;
+	  
+	case AST_PAUSE_EXHALE:
+	  dbg_state_machine =7;
+	  if (core_config.pause_exhale==false)
+	  {
+		CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, 
+		  FR_OPEN_INVALVE);  
+	  }
+	  else
+	  {
+		if (((-1.0*delta2) > core_config.assist_pressure_delta_trigger) && (delta<0))
+		{
+		  valve_contol(VALVE_IN, VALVE_CLOSE);
+		  valve_contol(VALVE_OUT, VALVE_CLOSE);         
+		}
+	  }   
+	  break;
+	  
+	default:
+	  dbg_state_machine =1000;
+	  TriggerAlarm(UNPREDICTABLE_CODE_EXECUTION);
+	  CoreSM_FORCE_ChangeState(&core_sm_context.force_sm, FR_OPEN_INVALVE);
+	  break;    
+	}
+	CheckAlarmConditions(core_sm_context.force_sm);
 
 
       
@@ -1043,46 +1042,46 @@ void  onTimerCoreTask(){
 
 void InitParameters()
 {
-  
-  core_config.run=false;
-  core_config.constant_rate_mode = true;
-  core_config.inhale_ms = 750;
-  core_config.inhale_ms_extra = 00;
-  core_config.exhale_ms = 1250;
-  core_config.pressure_alarm = 100;
-  core_config.pressure_alarm_off = 10;
-  core_config.pressure_forced_inhale_max = 0;
-  core_config.pressure_forced_exhale_min = 0;
-  core_config.pressure_drop = 8;
-  core_config.inhale_critical_alarm_ms = 16000;
-  core_config.exhale_critical_alarm_ms = 16000;
-  core_config.BreathMode = M_BREATH_FORCED; //M_BREATH_ASSISTED;//;
-  core_config.sim.rate_inhale_pressure=5;
-  core_config.sim.rate_exhale_pressure=10;  
-  core_config.flux_close = 5;
-  core_config.assist_pressure_delta_trigger=15;
-  core_config.target_pressure = 20;
-  core_config.target_pressure_auto = core_config.target_pressure;
-  core_config.target_pressure_assist = core_config.target_pressure;
+	core_config.run=false;
+	core_config.constant_rate_mode = true;
+	core_config.inhale_ms = 750;
+	core_config.inhale_ms_extra = 00;
+	core_config.exhale_ms = 1250;
+	core_config.pressure_alarm = 100;
+	core_config.pressure_alarm_off = 10;
+	core_config.pressure_forced_inhale_max = 0;
+	core_config.pressure_forced_exhale_min = 0;
+	core_config.pressure_drop = 8;
+	core_config.inhale_critical_alarm_ms = 16000;
+	core_config.exhale_critical_alarm_ms = 16000;
+	core_config.BreathMode = M_BREATH_FORCED; //M_BREATH_ASSISTED;//;
+	core_config.sim.rate_inhale_pressure=5;
+	core_config.sim.rate_exhale_pressure=10;  
+	core_config.flux_close = 5;
+	core_config.assist_pressure_delta_trigger=15;
+	core_config.target_pressure = 20;
+	core_config.target_pressure_auto = core_config.target_pressure;
+	core_config.target_pressure_assist = core_config.target_pressure;
 
-  core_config.respiratory_rate = 15;
-  core_config.respiratory_ratio = 0.66;
-  core_config.inhale_ms = 60000.0 / core_config.respiratory_rate * (1-core_config.respiratory_ratio);
-  core_config.exhale_ms = 60000.0 / core_config.respiratory_rate * (core_config.respiratory_ratio);
+	core_config.respiratory_rate = 15;
+	core_config.respiratory_ratio = 0.66;
+	core_config.inhale_ms = 60000.0 / core_config.respiratory_rate * (1-core_config.respiratory_ratio);
+	core_config.exhale_ms = 60000.0 / core_config.respiratory_rate * (core_config.respiratory_ratio);
 
 
-  core_config.P=70;//70;//12.8;
-  core_config.I=10;//10;//16;
-  core_config.D=0;
+	core_config.P=70;//70;//12.8;
+	core_config.I=10;//10;//16;
+	core_config.D=0;
 
-  core_config.P2=1.4;
-  core_config.I2=0.4;
-  core_config.D2=0;  
+	core_config.P2=1.4;
+	core_config.I2=0.4;
+	core_config.D2=0;  
 
-  core_config.pid_limit=0.65;
-  tidal_volume_c.AutoZero =1;
+	core_config.pid_limit=0.65;
+	tidal_volume_c.AutoZero =1;
 
-  
+	core_config.pause_lg=false;  
+	core_config.pause_lg_timer=0;    
 }
 
 void setup(void)
@@ -1281,8 +1280,6 @@ void SetCommandCallback(cmd* c) {
         core_config.inhale_critical_alarm_ms = 16000;
         core_config.exhale_critical_alarm_ms = 16000;
         core_config.BreathMode = M_BREATH_ASSISTED;
-         core_config.inhale_ms =0;
-         core_config.exhale_ms = 0;
       }
       Serial.println("valore=OK");
     }
@@ -1391,6 +1388,20 @@ void SetCommandCallback(cmd* c) {
       core_config.pause_inhale = numberValue;
       Serial.println("valore=OK");
     } 
+	
+    if (strPatam == "pause_lg")
+    {
+      int numberValue = value.getValue().toInt();
+      core_config.pause_lg = numberValue ? true:false;
+      Serial.println("valore=OK");
+    } 
+
+    if (strPatam == "pause_lg_time")
+    {
+      int numberValue = value.getValue().toFloat();
+      core_config.pause_lg_timer = numberValue * 1000.0;
+      Serial.println("valore=OK");
+    } 		
     
     if (strPatam == "pause_exhale")
     {
@@ -1989,33 +2000,6 @@ void loop() {
 
 }
 
-// Custom function accessible by the API
-int API_RUN_Control(String command) {
-
-  // Get state from command
-  int state = command.toInt();
-
-  if ((core_config.run==false) && (state==1))
-  {
-    core_config.run=true;
-    return 0;
-  }
-  else
-  {
-    if ((core_config.run==true) && (state==0))
-    {
-      core_config.run=false;
-      return 0;
-    }
-    else
-    {
-      return -1;
-    }
-  }
-    
-  
-}
-
 
 int read_pressure_sensor(int idx)
 {
@@ -2115,153 +2099,6 @@ int valve_contol(valves valve, int level)
 }
 
 
-
-void SimulationFunction()
-{
-  float r3;
-  float LO;
-  float HI;
-  if (SIMULATE_SENSORS != 1)
-  {
-    
-  }
-  else
-  {
-    switch(core_sm_context.force_sm)
-    {
-      case FR_OPEN_INVALVE:
-        pressure[0].last_pressure = 0;
-        break;
-
-      case FR_WAIT_INHALE_PRESSURE:
-        HI = core_config.sim.rate_inhale_pressure * 1.5;
-        LO = core_config.sim.rate_inhale_pressure - (core_config.sim.rate_inhale_pressure*0.5);
-        r3 = LO + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(HI-LO)));
-        pressure[0].last_pressure += r3;
-        break;
-
-      case FR_WAIT_INHALE_TIME:
-        ;
-        break;
-
-      case FR_OPEN_OUTVALVE:
-        ;
-        break;
-
-      case FR_WAIT_EXHALE_PRESSURE:
-        HI = core_config.sim.rate_exhale_pressure * 1.5;
-        LO = core_config.sim.rate_exhale_pressure - (core_config.sim.rate_exhale_pressure*0.5);
-        r3 = LO + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(HI-LO)));
-        pressure[0].last_pressure -= r3;
-        
-        break;
-
-      case FR_WAIT_EXHALE_TIME:
-        ;
-        break;
-
-      default:
-        
-        break;
-    }
-  }
-}
-
-
-
-// Custom function accessible by the API
-int API_SET_inhale_ms(String command) {
-  int value = command.toInt();
-  if ((value<0) && (value>15000)) return -1;
-  core_config.inhale_ms = value;
-  return 0;
-}
-
-int API_SET_exhale_ms(String command) {
-  int value = command.toInt();
-  if ((value<0) && (value>15000)) return -1;
-  core_config.exhale_ms = value;
-  return 0;
-}
-
-int API_SET_inhale_critical_alarm_ms(String command) {
-  int value = command.toInt();
-  if ((value<0) && (value>15000)) return -1;
-  core_config.inhale_critical_alarm_ms = value;
-  return 0;
-}
-
-int API_SET_exhale_critical_alarm_ms(String command) {
-  int value = command.toInt();
-  if ((value<0) && (value>15000)) return -1;
-  core_config.exhale_critical_alarm_ms = value;
-  return 0;
-}
-
-int API_SET_pressure_forced_inhale_max(String command) {
-  float value = command.toFloat();
-  if ((value<0) && (value>15000)) return -1;
-  core_config.pressure_forced_inhale_max = value;
-  return 0;
-}
-
-int API_SET_pressure_forced_exhale_min(String command) {
-  float value = command.toFloat();
-  if ((value<0) && (value>15000)) return -1;
-  core_config.pressure_forced_exhale_min = value;
-  return 0;
-}
-
-int API_SET_pressure_drop(String command) {
-  float value = command.toFloat();
-  if ((value<0) && (value>15000)) return -1;
-  core_config.pressure_drop = value;
-  return 0;
-}
-
-int API_SET_inhale_ms_extra(String command) {
-  int32_t value = command.toInt();
-  if ((value<0) && (value>15000)) return -1;
-  core_config.inhale_ms_extra = value;
-  return 0;
-}
-
-int API_SET_assist_pressure_delta_trigger(String command) {
-  float value = command.toFloat();
-  if ((value<15000) && (value>15000)) return -1;
-  core_config.assist_pressure_delta_trigger = value;
-  return 0;
-}
-
-
-int API_SET_control_mode(String command) {
-  int32_t value = command.toInt();
-  if (value==0)
-  {
-    core_config.BreathMode = M_BREATH_FORCED;
-  }
-  else
-  {
-    if (value==1)
-    {
-      core_config.BreathMode = M_BREATH_ASSISTED;
-    }
-    else
-      return -1;
-  }
-}
-
-int API_SET_costant_rate(String command) {
-  int32_t value = command.toInt();
-  if (value==0)
-  {
-    core_config.constant_rate_mode = false;
-  }
-  else
-  {
-    core_config.constant_rate_mode = true;
-  }
-}
 
 
 
@@ -2726,11 +2563,3 @@ void StatsUpdate()
         __stat_param.flux_t90b =  millis() - __stat_param.start_time ;                  
      }
 }
-/*
-void CalculateStatOnRising()
-{
-  if (t10==-1)
-  {
-    if (pressure[1].last_pressure > 0.1 * )
-  }
-}*/
