@@ -162,6 +162,7 @@ struct
     float backup_min_rate;
 
     float pause_lg_timer;
+    float pause_lg_p;
     bool pause_lg;
 
 } core_config;
@@ -1279,6 +1280,12 @@ void SetCommandCallback(cmd* c)
         Serial.println("valore=OK");
     }
 
+    if (strPatam == "pause_lg_p") {
+        int numberValue = value.getValue().toFloat();
+        core_config.pause_lg_p = numberValue ;
+        Serial.println("valore=OK");
+    }    
+
     if (strPatam == "pause_exhale") {
         int numberValue = value.getValue().toInt();
         core_config.pause_exhale = numberValue;
@@ -1513,6 +1520,20 @@ void GetCommandCallback(cmd* c)
             Serial.println("valore=no_data");
         }
     }
+
+
+     if (strPatam == "pause_lg") {
+        Serial.println("valore=" + String(core_config.pause_lg));
+    }
+
+    if (strPatam == "pause_lg_time") {
+        Serial.println("valore=" + String(core_config.pause_lg_timer));
+    }
+
+    if (strPatam == "pause_lg_p") {
+      Serial.println("valore=" + String(core_config.pause_lg_p));
+    }    
+
 }
 
 /*float P = 0.8;
