@@ -1527,7 +1527,7 @@ void GetCommandCallback(cmd* c)
     }
 
     if (strPatam == "pause_lg_time") {
-        Serial.println("valore=" + String(core_config.pause_lg_timer));
+        Serial.println("valore=" + String(core_config.pause_lg_timer/1000.0));
     }
 
     if (strPatam == "pause_lg_p") {
