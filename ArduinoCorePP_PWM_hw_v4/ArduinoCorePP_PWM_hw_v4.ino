@@ -1559,7 +1559,7 @@ void GetCommandCallback(cmd* c)
             + "," + String(currentP_Peak)
             + "," + String(currentTvIsnp * VOL_COMP)
             + "," + String(currentTvEsp * VOL_COMP)
-            + "," + String(currentVM));
+            + "," + String(currentTvIsnp * VOL_COMP * last_bpm/1000.0));
     }
 
     if (strPatam == "calib") {
