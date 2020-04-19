@@ -1650,6 +1650,13 @@ void GetCommandCallback(cmd* c)
     }          
 
 
+
+    if (strPatam == "pcv_trigger_enable") {
+        Serial.println("valore=" + String(core_config.pcv_trigger_enable?1:0));
+    }
+    if (strPatam == "pcv_trigger") {
+        Serial.println("valore="+ String(core_config.pcv_trigger));
+    }
 }
 
 /*float P = 0.8;
