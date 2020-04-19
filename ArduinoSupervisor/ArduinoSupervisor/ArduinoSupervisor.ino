@@ -1,4 +1,21 @@
-
+/****************************************************************************
+ * MVM Ventialotor V4 Firmware
+ * 
+ * This code is designed to run on the HW V4 of MVM Ventialor
+ * 
+ * This code is distributed as DEMO and has NOT been tested and is NOT approved
+ * by quality check of Nuclear Instruments or Elemaster
+ * 
+ * !!!!   This code MUST NOT BE USED on final application    !!!!!
+ * 
+ * Nuclear Instruments and Elemaster do not take responsibility for damage caused
+ * by using this code and decline any responsability
+ * 
+ * This code is property of Nuclear Instruments and distributed 
+ * with fair use license
+ * 
+ ****************************************************************************/
+ 
 
 #define SCL_PIN 2
 #define SCL_PORT PORTD
