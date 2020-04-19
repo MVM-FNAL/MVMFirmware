@@ -16,16 +16,19 @@
 #include <math.h>
 #include <SimpleCLI.h>
 #include "sfm3019_all.h"
+#include "ads1115.h"
 
 #define VOL_COMP 0.65
 
 #define TCAADDR 0x70
 
-#define IIC_MUX_FLOW2 3
-#define IIC_MUX_FLOW1 2
-#define IIC_MUX_P_FASTLOOP 4
-#define IIC_MUX_P_2 5
-#define IIC_MUX_P_3 6
+#define IIC_MUX_FLOW2 2
+#define IIC_MUX_FLOW1 1
+#define IIC_MUX_P_FASTLOOP 0
+#define IIC_MUX_P_2 1
+#define IIC_MUX_P_3 2
+#define IIC_MUX_ADC 4
+#define IIC_MUX_SUPERVISOR 3
 
 #define VERBOSE_LEVEL 1
 #define LISTEN_PORT 80
@@ -40,11 +43,14 @@
 
 //#define VALVE_IN_PIN  A0 //15//14  (25)
 
-#define DAC1 A0 //25
+#define DAC1 A1 //25
 #define VALVE_OUT_PIN 32 //2 //12   (34)
 
-#define BUZZER A11
-#define ALARM_LED A12
+#define BUZZER 21
+#define ALARM_LED 17
+#define ALARM_RELE A12
+
+#define BREETHE 4
 
 #define SIMULATE_SENSORS 0
 
@@ -169,6 +175,8 @@ struct
     float pause_lg_p;
     bool pause_lg;
 
+    bool pcv_trigger_enable;
+    float pcv_trigger;
 } core_config;
 
 typedef struct
@@ -253,7 +261,9 @@ typedef struct
 } t_stat_param;
 t_stat_param __stat_param;
 
-t_ps_sensor pressure_sensor_type[] = { DS_01, DS_01, DS_01, DS_01 };
+uint8_t LAST_MUX;
+float ADS_V[4];
+t_ps_sensor pressure_sensor_type[] = { GS_05, DS_01, DS_01, GS_05 };
 
 uint8_t pressure_sensor_i2c_address[] = { 0x76, 0x77, 0x76, 0x77 };
 uint8_t pressure_sensor_i2c_mux[] = { IIC_MUX_P_FASTLOOP, IIC_MUX_P_FASTLOOP, IIC_MUX_P_2, IIC_MUX_P_2 };
@@ -278,7 +288,7 @@ float temperature = 0;
 
 bool batteryPowered = false;
 float currentBatteryCharge = 100;
-
+float Pinput = 0;
 float currentP_Peak = 0;
 float currentTvIsnp = 0;
 float currentTvEsp = 0;
@@ -505,7 +515,8 @@ void CheckAlarmConditions(t_core__force_sm sm)
 
     if (ALARM_FLAG != 0) {
         //ledcWrite(1, 128);
-
+        
+        digitalWrite(ALARM_RELE, LOW);
         if (millis() - led_time > 250) {
             led_time = millis();
             led_on = led_on ? false : true;
@@ -680,6 +691,7 @@ void CheckAlarmConditions(t_core__force_sm sm)
     }
     else {
         //ledcWrite(1, 0);
+        digitalWrite(ALARM_RELE, HIGH);
         digitalWrite(ALARM_LED, LOW);
         digitalWrite(BUZZER, LOW);
         alarm_state = 0;
@@ -746,6 +758,7 @@ void onTimerCoreTask()
                 CoreSM_FORCE_ChangeState(&core_sm_context.force_sm,
                     FR_WAIT_INHALE_TIME);
                 DBG_print(3, "FR_OPEN_INVALVE");
+                digitalWrite(BREETHE, HIGH);
             }
             else {
                 //ASSISTED
@@ -760,10 +773,8 @@ void onTimerCoreTask()
                     if (core_config.backup_enable)
                     {
                       float dt = millis() - last_start;
-                      float dr = 60000.0;
-                      if (dt!=0)
-                        dr=60000.0/dt;
-                      if (dr<core_config.backup_min_rate)
+                      
+                      if (dt>core_config.backup_min_rate)
                       {
                         backup_trigger=true;
                       }
@@ -799,6 +810,7 @@ void onTimerCoreTask()
                         CoreSM_FORCE_ChangeState(&core_sm_context.force_sm,
                             AST_WAIT_MIN_INHALE_TIME);
 
+                        digitalWrite(BREETHE, HIGH);
                         DBG_print(3, "FR_OPEN_INVALVE");
                     }
                 }
@@ -833,6 +845,8 @@ void onTimerCoreTask()
                 CoreSM_FORCE_ChangeState(&core_sm_context.force_sm,
                     FR_WAIT_EXHALE_TIME);
                 DBG_print(3, "FR_WAIT_INHALE_TIME");
+
+                digitalWrite(BREETHE, LOW);
             }
             else {
                 if (core_config.pause_lg == false)
@@ -855,7 +869,6 @@ void onTimerCoreTask()
             if (core_config.pause_exhale == false) {
                 StatEndCycle();
                 peep_look = false;
-
                 valve_contol(VALVE_OUT, VALVE_CLOSE);
                 CoreSM_FORCE_ChangeState(&core_sm_context.force_sm,
                     FR_OPEN_INVALVE);
@@ -865,6 +878,22 @@ void onTimerCoreTask()
             else {
                 valve_contol(VALVE_OUT, VALVE_CLOSE);
             }
+        }
+        else
+        {
+           if (core_sm_context.timer1 >= (700 / TIMERCORE_INTERVAL_MS)) {
+ 
+            if(core_config.pcv_trigger_enable)
+            {
+               if (((-1.0 * delta2) > core_config.pcv_trigger) && (delta < 0) ) {
+                  StatEndCycle();
+                    peep_look = false;
+                    valve_contol(VALVE_OUT, VALVE_CLOSE);
+                    CoreSM_FORCE_ChangeState(&core_sm_context.force_sm,
+                        FR_OPEN_INVALVE);
+                }
+            }
+           }
         }
         break;
 
@@ -887,6 +916,7 @@ void onTimerCoreTask()
             CoreSM_FORCE_ChangeState(&core_sm_context.force_sm,
                 AST_WAIT_FLUX_DROP_b);
             DBG_print(3, "FR_WAIT_FLUX_DROP");
+            
         }
         break;
 
@@ -904,6 +934,7 @@ void onTimerCoreTask()
             CoreSM_FORCE_ChangeState(&core_sm_context.force_sm,
                 AST_DEADTIME);
             DBG_print(3, "FR_WAIT_FLUX_DROP_b");
+            digitalWrite(BREETHE, LOW);
         }
         else {
             if (core_config.pause_lg == false)
@@ -1017,6 +1048,9 @@ void InitParameters()
 
     core_config.pause_lg = false;
     core_config.pause_lg_timer = 0;
+
+    core_config.pcv_trigger_enable=false;
+    core_config.pcv_trigger = 5;
 }
 
 void setup(void)
@@ -1035,10 +1069,15 @@ void setup(void)
     //ledcWrite(1, 0);
     pinMode(VALVE_OUT_PIN, OUTPUT);
     pinMode(ALARM_LED, OUTPUT);
+    pinMode(ALARM_RELE, OUTPUT);
     pinMode(BUZZER, OUTPUT);
+    pinMode(BREETHE, OUTPUT);
+    
 
+    digitalWrite(BREETHE, LOW);
     digitalWrite(ALARM_LED, LOW);
     digitalWrite(BUZZER, LOW);
+    digitalWrite(ALARM_RELE, HIGH);
 
     // Start Serial
     Serial.begin(115200);
@@ -1364,7 +1403,7 @@ void SetCommandCallback(cmd* c)
         Serial.println("valore=OK");
     }
 
-    if (strPatam == "backup_min_rate") {
+    if (strPatam == "backup_min_time") {
         float numberValue = value.getValue().toFloat();
         numberValue = numberValue<1?1:numberValue;
         core_config.backup_min_rate = numberValue;
@@ -1374,6 +1413,18 @@ void SetCommandCallback(cmd* c)
     if (strPatam == "stats_clear") {
         ResetStatsBegin();
     }
+
+    if (strPatam == "pcv_trigger_enable") {
+        int numberValue = value.getValue().toInt();
+        core_config.pcv_trigger_enable = numberValue ? true : false;
+        Serial.println("valore=OK");
+    }
+    if (strPatam == "pcv_trigger") {
+        float numberValue = value.getValue().toFloat();
+        core_config.pcv_trigger = numberValue;
+        Serial.println("valore=OK");
+    }
+
 }
 
 void GetCommandCallback(cmd* c)
@@ -1386,6 +1437,10 @@ void GetCommandCallback(cmd* c)
     String strPatam = param.getValue();
 
     //Serial.println("CMD: " +  param.getValue() + " " +  value.getValue());
+    if (strPatam == "pinput") {
+        Serial.println("valore=" + String(Pinput));
+    }
+
 
     if (strPatam == "pressure") {
         Serial.println("valore=" + String(pressure[0].last_pressure));
@@ -1468,7 +1523,7 @@ void GetCommandCallback(cmd* c)
     if (strPatam == "backup_enable") {
         Serial.println("valore=" + String(core_config.backup_enable ? 1 : 0));
     }
-    if (strPatam == "backup_min_rate") {
+    if (strPatam == "backup_min_time") {
         Serial.println("valore=" + String(core_config.backup_min_rate));
     }
 
@@ -1554,7 +1609,21 @@ void GetCommandCallback(cmd* c)
 
     if (strPatam == "pause_lg_p") {
       Serial.println("valore=" + String(core_config.pause_lg_p));
-    }    
+    }  
+
+    if (strPatam == "ads") {
+      
+      float V1, V2, V3, V4;
+      uint8_t MUXBACKUP = LAST_MUX;
+
+
+     /* V1 = (V1/V2)*2.5;
+      V3 = (V1/V2)*2.5;
+      V4 = (V1/V2)*2.5;
+*/
+      Serial.println("REF: " + String(ADS_V[0]) + " Oxygen: " + String(ADS_V[1]) + " 12v: " + String(ADS_V[2]) + " 5v: " + String(ADS_V[3]));
+    }          
+
 
 }
 
@@ -1679,6 +1748,9 @@ void PressureControlLoop_PRESSIN()
 
 void loop()
 {
+   static uint32_t ads_last_read=0;
+      static uint8_t ads_idx;
+      
     static float pmem[6];
     static float vmem[6];
     static float VenturiFlux;
@@ -1809,6 +1881,26 @@ void loop()
         
         StatsUpdate();
         i2c_MuxSelect(IIC_MUX_P_FASTLOOP);
+
+        //Serial.println(dp);
+    }
+    else
+    {
+     
+      /*if (millis() > ads_last_read + 100) {
+        ads_last_read = millis();
+        i2c_MuxSelect(IIC_MUX_ADC);
+        ADS_V[ads_idx] = (float) readADC_SingleEnded(0x48,ads_idx);
+        ads_idx++;
+        if (ads_idx > 3) ads_idx=0;
+        
+
+        i2c_MuxSelect(IIC_MUX_SUPERVISOR);
+        WriteSupervisor(0x22, 0x02, core_config.run ? 1:0);
+        currentBatteryCharge = ReadSupervisor(0x22, 0x51);
+        Pinput =((float) ReadSupervisor(0x22, 0x50))/1000.0;
+        i2c_MuxSelect(IIC_MUX_P_FASTLOOP);
+      }*/
     }
 
     //DBG_print(1,String(gasflux[0].last_flux) + "," + String(pressure[0].last_pressure)+ "," + String(PIDMonitor/2) + "," + String(valve2_status)+"," +
@@ -2204,6 +2296,7 @@ void i2c_MuxSelect(uint8_t i)
 {
     if (i > 7)
         return;
+    LAST_MUX = i;
 
     Wire.beginTransmission(TCAADDR);
     Wire.write(1 << i);
@@ -2360,4 +2453,27 @@ void StatsUpdate()
         if ((gasflux[0].last_flux <= 0.9 * __stat_param.flux_peak) && (__stat_param.flux_t90b == -1000))
             __stat_param.flux_t90b = millis() - __stat_param.start_time;
     }
+}
+
+uint16_t ReadSupervisor(uint8_t address, uint8_t i_address)
+{
+    Wire.beginTransmission(address);
+    Wire.write(i_address);
+    Wire.endTransmission();
+    Wire.requestFrom(address,2); 
+    uint16_t a = Wire.read(); 
+    uint16_t b = Wire.read();
+
+    a = (b << 8) | a; 
+    return a;
+}
+
+
+void WriteSupervisor(uint8_t address, uint8_t i_address, uint16_t write_data)
+{
+    Wire.beginTransmission(address);
+    Wire.write(i_address);
+    Wire.write(write_data & 0xFF);
+    Wire.write((write_data>>8) & 0xFF);
+    Wire.endTransmission();
 }
