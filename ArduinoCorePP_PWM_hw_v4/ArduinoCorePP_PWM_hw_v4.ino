@@ -23,7 +23,7 @@
  * 
  ****************************************************************************/
 
-#define _FIRMWARE_VERSION_ "HW_V3_2020_04_15_00"
+#define _FIRMWARE_VERSION_ "HW_V4_2020_04_20_00"
 
 //PID
 //resistenza 5- 20
@@ -41,7 +41,7 @@
 #include <math.h>
 #include <SimpleCLI.h>
 #include "sfm3019_all.h"
-#include "ads1115.h"
+#include <Adafruit_ADS1015.h>
 
 #define VOL_COMP 0.65
 
@@ -134,6 +134,8 @@ typedef enum { DS_01,
     GS_05 } t_ps_sensor;
 
 // The port to listen for incoming TCP connections
+
+Adafruit_ADS1115 ads;
 
 Ticker CoreTask;
 
@@ -343,6 +345,9 @@ bool use_Sensirion_Backup = false;
 
 float dt_veturi_100ms=0;
 
+float oxygen_q = 0.00452689;
+float oxygen_m = -1.63;
+
 int read_pressure_sensor(int idx);
 int valve_contol(valves valve, int level);
 void CoreSM_FORCE_ChangeState(t_core__force_sm* sm, t_core__force_sm NEW_STATE);
@@ -378,6 +383,14 @@ void ResetStatsBegin();
 void StatPhaseExpire();
 void StatEndCycle();
 void StatsUpdate();
+
+float GetOxygenPercent(float lsb)
+{
+  float o2;
+  o2 = lsb*oxygen_q + oxygen_m;
+  o2 = o2 > 100 ? 100 : o2;
+  return o2;
+}
 
 void DBG_print(int level, String str)
 {
@@ -927,9 +940,10 @@ void onTimerCoreTask()
     case AST_WAIT_MIN_INHALE_TIME:
         dbg_state_machine = 3;
         if (core_sm_context.timer1 > 300 / TIMERCORE_INTERVAL_MS) {
-            if (pressure[1].last_pressure >= core_config.target_pressure * 0.5) {
+            if ((pressure[0].last_pressure >= core_config.target_pressure * 0.5) || (core_sm_context.timer1 > 5000 / TIMERCORE_INTERVAL_MS))  {
                 CoreSM_FORCE_ChangeState(&core_sm_context.force_sm,
                     AST_WAIT_FLUX_DROP);
+                core_sm_context.timer1=0;
                 DBG_print(3, "AST_WAIT_MIN_INHALE_TIME");
             }
         }
@@ -938,7 +952,9 @@ void onTimerCoreTask()
     case AST_WAIT_FLUX_DROP:
         dbg_state_machine = 4;
 
-        if ((gasflux[0].last_flux <= (core_config.flux_close * fluxpeak) / 100.0) || (in_over_pressure_emergency==true)) {
+        if ((gasflux[0].last_flux <= (core_config.flux_close * fluxpeak) / 100.0) 
+              || (in_over_pressure_emergency==true) 
+              || (core_sm_context.timer1 > 8000 / TIMERCORE_INTERVAL_MS)) {
             last_isp_time = core_sm_context.timer1;
             CoreSM_FORCE_ChangeState(&core_sm_context.force_sm,
                 AST_WAIT_FLUX_DROP_b);
@@ -1086,6 +1102,8 @@ void InitParameters()
 
 void setup(void)
 {
+    ads.setGain(GAIN_ONE);
+    ads.begin();
     //pinMode (VALVE_IN_PIN, OUTPUT);
 
     ledcSetup(0, 10000, 12);
@@ -1592,6 +1610,19 @@ void GetCommandCallback(cmd* c)
         Serial.println("valore=" + String(tidal_volume_c.InspVolumeVenturi) + "," + String(tidal_volume_c.ExpVolumeVenturi) + "," + String(tidal_volume_c.AutoZero));
     }
 
+    if (strPatam == "calib_o2") {
+        
+        float o2_Temp = 0;
+        o2_Temp=ADS_V[0];
+        o2_Temp = o2_Temp* oxygen_q;
+        oxygen_m = -(o2_Temp - 21);  
+        
+        Serial.println("valore=" + String(oxygen_m));
+    }
+
+
+    
+
     if (strPatam == "stats") {
         if (__stat_param.mean_cnt > 0) {
             float overshoot_avg = __stat_param.overshoot_avg / __stat_param.mean_cnt;
@@ -1652,7 +1683,8 @@ void GetCommandCallback(cmd* c)
       V3 = (V1/V2)*2.5;
       V4 = (V1/V2)*2.5;
 */
-      Serial.println("REF: " + String(ADS_V[0]) + " Oxygen: " + String(ADS_V[1]) + " 12v: " + String(ADS_V[2]) + " 5v: " + String(ADS_V[3]));
+      ADS_V[1] = ADS_V[1] < 1 ? 1:ADS_V[1];
+      Serial.println("Oxygen: " + String(ADS_V[0]) + " REF: " + String(ADS_V[1]) + " 12v: " + String(ADS_V[2]/ADS_V[1]*2.5*5) + " 5v: " + String(ADS_V[3]/ADS_V[1]*2.5*2));
     }          
 
 
@@ -1936,13 +1968,15 @@ void loop()
     else
     {
      
-      if (millis() > ads_last_read + 100) {
+      if (millis() > ads_last_read + 1000) {
         ads_last_read = millis();
         i2c_MuxSelect(IIC_MUX_ADC);
-        ADS_V[1] = (float) readADC_SingleEnded(0x48,1);
+        ADS_V[ads_idx] = (float) ads.readADC_SingleEnded(ads_idx);
         ads_idx++;
         if (ads_idx > 3) ads_idx=0;
         i2c_MuxSelect(IIC_MUX_P_FASTLOOP);
+
+        last_O2 = GetOxygenPercent(ADS_V[0]);
 
        /* i2c_MuxSelect(IIC_MUX_SUPERVISOR);
         WriteSupervisor(0x22, 0x02, core_config.run ? 1:0);
