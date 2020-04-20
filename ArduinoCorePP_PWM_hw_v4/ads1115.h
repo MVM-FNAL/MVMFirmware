@@ -107,7 +107,7 @@ static void writeRegister(uint8_t i2cAddress, uint8_t reg, uint16_t value) {
 static uint16_t readRegister(uint8_t i2cAddress, uint8_t reg) {
   uint16_t dato;
   Wire.beginTransmission(i2cAddress);
-  Wire.write(ADS1015_REG_POINTER_CONVERT);
+  Wire.write(reg);
   Wire.endTransmission();
 
   Wire.requestFrom(i2cAddress, 2);
@@ -123,7 +123,7 @@ uint16_t readADC_SingleEnded(uint8_t i2cAddress, uint8_t channel) {
   {
     return 0;
   }
-  int m_gain=GAIN_ONE;
+  int m_gain=GAIN_TWOTHIRDS;
   
   // Start with default values
   uint16_t config = ADS1015_REG_CONFIG_CQUE_NONE    | // Disable the comparator (default val)

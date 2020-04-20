@@ -146,7 +146,7 @@ Command param_get;
 SfmConfig sfm3019_inhale;
 
 bool in_pressure_alarm = false;
-
+bool in_over_pressure_emergency = false;
 struct
     {
     bool run;
@@ -753,6 +753,7 @@ void onTimerCoreTask()
         if (core_config.run) {
             //RUN RESPIRATORY
             if (core_config.BreathMode == M_BREATH_FORCED) {
+                in_over_pressure_emergency=false;
                 //AUTOMATIC
                 PRES_SENS_CT[2].ZERO += dt_veturi_100ms;
                 core_config.target_pressure = core_config.target_pressure_auto;
@@ -799,12 +800,13 @@ void onTimerCoreTask()
                     {
                       float dt = millis() - last_start;
                       
-                      if (dt>core_config.backup_min_rate)
+                      if (dt/1000.0>core_config.backup_min_rate)
                       {
                         backup_trigger=true;
                       }
                     }
                     if ((((-1.0 * delta2) > core_config.assist_pressure_delta_trigger) && (delta < 0)) || (backup_trigger==true)) {
+                        in_over_pressure_emergency=false;
                         dbg_trigger = 1;
                         PRES_SENS_CT[2].ZERO += dt_veturi_100ms;
                         if (tidal_volume_c.TidalCorrection > 0) {
@@ -936,7 +938,7 @@ void onTimerCoreTask()
     case AST_WAIT_FLUX_DROP:
         dbg_state_machine = 4;
 
-        if (gasflux[0].last_flux <= (core_config.flux_close * fluxpeak) / 100.0) {
+        if ((gasflux[0].last_flux <= (core_config.flux_close * fluxpeak) / 100.0) || (in_over_pressure_emergency==true)) {
             last_isp_time = core_sm_context.timer1;
             CoreSM_FORCE_ChangeState(&core_sm_context.force_sm,
                 AST_WAIT_FLUX_DROP_b);
@@ -976,7 +978,11 @@ void onTimerCoreTask()
 
     case AST_DEADTIME:
         dbg_state_machine = 6;
-        if (core_sm_context.timer1 >= last_isp_time) {
+        float dead_time_s;
+        dead_time_s = 0.75 * last_isp_time;
+        dead_time_s = dead_time_s > 400 ? dead_time_s : 400;
+        dead_time_s = dead_time_s > 2000 ? 2000 : dead_time_s;
+        if (core_sm_context.timer1 >= dead_time_s) {
             if (core_config.pause_exhale == false) {
                 CoreSM_FORCE_ChangeState(&core_sm_context.force_sm,
                     FR_OPEN_INVALVE);
@@ -1810,6 +1816,11 @@ void loop()
         TriggerAlarm(UNABLE_TO_READ_SENSOR_PRESSURE);
     }
 
+    if (pressure[0].last_pressure>70)
+    {
+     valve_contol(VALVE_OUT, VALVE_OPEN);
+     in_over_pressure_emergency=true;
+    }
     PressureControlLoop_PRESSIN();
 
 
@@ -1818,6 +1829,12 @@ void loop()
         if (read_pressure_sensor(1) != 0) {
             TriggerAlarm(UNABLE_TO_READ_SENSOR_PRESSURE);
         }
+
+        if (pressure[1].last_pressure>50)
+        {
+         valve_contol(VALVE_OUT, VALVE_OPEN);
+         in_over_pressure_emergency=true;
+         }
 
         PressureControlLoop_PRESSIN_SLOW();
         pplow = 0.90 * pplow + pressure[1].last_pressure * 0.1;
@@ -1919,20 +1936,20 @@ void loop()
     else
     {
      
-      /*if (millis() > ads_last_read + 100) {
+      if (millis() > ads_last_read + 100) {
         ads_last_read = millis();
         i2c_MuxSelect(IIC_MUX_ADC);
-        ADS_V[ads_idx] = (float) readADC_SingleEnded(0x48,ads_idx);
+        ADS_V[1] = (float) readADC_SingleEnded(0x48,1);
         ads_idx++;
         if (ads_idx > 3) ads_idx=0;
-        
+        i2c_MuxSelect(IIC_MUX_P_FASTLOOP);
 
-        i2c_MuxSelect(IIC_MUX_SUPERVISOR);
+       /* i2c_MuxSelect(IIC_MUX_SUPERVISOR);
         WriteSupervisor(0x22, 0x02, core_config.run ? 1:0);
         currentBatteryCharge = ReadSupervisor(0x22, 0x51);
         Pinput =((float) ReadSupervisor(0x22, 0x50))/1000.0;
-        i2c_MuxSelect(IIC_MUX_P_FASTLOOP);
-      }*/
+        i2c_MuxSelect(IIC_MUX_P_FASTLOOP);*/
+      }
     }
 
     //DBG_print(1,String(gasflux[0].last_flux) + "," + String(pressure[0].last_pressure)+ "," + String(PIDMonitor/2) + "," + String(valve2_status)+"," +

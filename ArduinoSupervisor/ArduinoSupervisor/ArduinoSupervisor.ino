@@ -157,7 +157,7 @@ void loop() {
   " ALARM_FLAG: " + String(ALARM_FLAG)
   
   );
-
+/*
   //Allarmi solo in RUN
   if (Run)
   {
@@ -215,7 +215,7 @@ else
   
 }
   //Allarmi sempre attivi
-
+*/
 
   delay(25);
   
