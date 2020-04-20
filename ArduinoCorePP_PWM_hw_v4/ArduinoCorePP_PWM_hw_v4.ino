@@ -995,9 +995,9 @@ void onTimerCoreTask()
     case AST_DEADTIME:
         dbg_state_machine = 6;
         float dead_time_s;
-        dead_time_s = 0.75 * last_isp_time;
-        dead_time_s = dead_time_s > 400 ? dead_time_s : 400;
-        dead_time_s = dead_time_s > 2000 ? 2000 : dead_time_s;
+        dead_time_s = 0.5 * last_isp_time;
+        dead_time_s = dead_time_s > 400/ TIMERCORE_INTERVAL_MS ? dead_time_s : 400/ TIMERCORE_INTERVAL_MS;
+        dead_time_s = dead_time_s > 2000/ TIMERCORE_INTERVAL_MS ? 2000/ TIMERCORE_INTERVAL_MS : dead_time_s;
         if (core_sm_context.timer1 >= dead_time_s) {
             if (core_config.pause_exhale == false) {
                 CoreSM_FORCE_ChangeState(&core_sm_context.force_sm,
