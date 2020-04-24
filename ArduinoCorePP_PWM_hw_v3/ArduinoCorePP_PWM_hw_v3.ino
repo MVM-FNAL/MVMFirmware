@@ -1708,6 +1708,7 @@ void loop()
     static float pmem[6];
     static float vmem[6];
     static float VenturiFlux;
+    static float sp2_dp = 0;
     static uint32_t last_loop_time;
     static uint8_t RestStateMachine = 0;
     static int serverhanging = 0; // Used to monitor how long the client is hanging
@@ -1796,6 +1797,7 @@ void loop()
         dp = pressure[2].last_pressure;
         vf = 0.1513 * (dp * dp * dp) - 3.3424 * (dp * dp) + 41.657 * dp;
         VenturiFlux = 0.8 * VenturiFlux + 0.2 * vf;
+        sp2_dp = dp;
 
         switch (tidal_volume_c.TidalStatus) {
         case 0:
@@ -1842,7 +1844,7 @@ void loop()
 
     if (__CONSOLE_MODE == true) {
         String ts = __ADDTimeStamp ? String(millis()) + "," : "";
-        DBG_print(1, ts + String(gasflux[0].last_flux) + "," + String(pressure[0].last_pressure) + "," + String(pressure[1].last_pressure) + "," + String(PIDMonitor * 100 / 4096) + "," + String(PIDMonitor2) + "," + String(valve2_status) + "," + String(VenturiFlux) + "," + String(tidal_volume_c.FLUX) + "," + String(tidal_volume_c.TidalVolume * 0.02) + "," + String(dgb_delta));
+        DBG_print(1, ts + String(gasflux[0].last_flux) + "," + String(pressure[0].last_pressure) + "," + String(pressure[1].last_pressure) + "," + String(PIDMonitor * 100 / 4096) + "," + String(PIDMonitor2) + "," + String(valve2_status) + "," + String(VenturiFlux) + "," + String(tidal_volume_c.FLUX) + "," + String(tidal_volume_c.TidalVolume * 0.02) + "," + String(dgb_delta) + "," + String(sp2_dp));
     }
     //String(dgb_delta*100) + "," + String(dbg_trigger*50));
 
